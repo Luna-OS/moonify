@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Moonify</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <canvas id="sky" aria-hidden="true"></canvas>
+    <div class="nebula" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-moon" id="brand-moon"></span>
+        <span class="brand-name">Moonify</span>
+      </div>
+      <div class="nav-buttons">
+        <button class="icon-btn" id="nav-back" title="Zurück" aria-label="Zurück" disabled></button>
+        <button class="icon-btn" id="nav-forward" title="Vor" aria-label="Vor" disabled></button>
+        <button class="icon-btn" id="nav-reload" title="Neu laden" aria-label="Neu laden" disabled></button>
+      </div>
+      <form class="search" id="search-form" role="search" autocomplete="off">
+        <span class="search-icon" id="search-icon"></span>
+        <input id="search-input" type="search" placeholder="Suchen …" aria-label="Musik suchen" />
+        <kbd class="search-kbd" id="search-kbd">Strg K</kbd>
+      </form>
+      <div class="titlebar-spacer"></div>
+    </header>
+
+    <nav class="sidebar" aria-label="Navigation">
+      <button class="nav-item" data-view="home" id="nav-home"></button>
+      <div class="nav-section">Deine Musik</div>
+      <div class="nav-providers" id="nav-providers"></div>
+      <div class="nav-empty" id="nav-empty">Noch kein Anbieter verbunden.</div>
+      <div class="sidebar-spacer"></div>
+      <button class="nav-item nav-manage" data-view="providers" id="nav-manage"></button>
+      <div class="tonight" id="tonight"></div>
+    </nav>
+
+    <main class="content" id="content">
+      <section class="view" id="view-home" aria-label="Start"></section>
+      <section class="view" id="view-providers" aria-label="Anbieter verwalten"></section>
+      <section class="provider-stage" id="provider-stage" aria-label="Anbieter">
+        <div class="search-strip" id="search-strip" hidden></div>
+        <div class="webviews" id="webviews"></div>
+      </section>
+    </main>
+
+    <footer class="player" id="player">
+      <div class="now">
+        <div class="now-art" id="now-art"></div>
+        <div class="now-text">
+          <div class="now-title" id="now-title">Nichts läuft gerade</div>
+          <div class="now-artist" id="now-artist">Starte Musik bei einem deiner Anbieter</div>
+          <button class="now-source" id="now-source" hidden></button>
+        </div>
+      </div>
+      <div class="transport">
+        <div class="controls">
+          <button class="icon-btn ctrl" id="btn-prev" aria-label="Vorheriger Titel" title="Vorheriger Titel" disabled></button>
+          <button class="play-btn" id="btn-play" aria-label="Abspielen" title="Abspielen" disabled></button>
+          <button class="icon-btn ctrl" id="btn-next" aria-label="Nächster Titel" title="Nächster Titel" disabled></button>
+        </div>
+        <div class="timeline">
+          <span class="time" id="time-current">0:00</span>
+          <div id="progress"></div>
+          <span class="time" id="time-total">0:00</span>
+        </div>
+      </div>
+      <div class="volume">
+        <button class="icon-btn" id="btn-mute" aria-label="Stumm schalten" title="Stumm schalten"></button>
+        <input id="volume" class="star-range" type="range" min="0" max="100" step="1" aria-label="Lautstärke" />
+      </div>
+    </footer>
+
+    <div class="modal-backdrop" id="modal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <h2 id="modal-title"></h2>
+        <p id="modal-text"></p>
+        <div class="modal-actions" id="modal-actions"></div>
+      </div>
+    </div>
+  </body>
+</html>
