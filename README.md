@@ -24,7 +24,12 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
 - **Getrennte Logins:** Jeder Dienst hat eine eigene, gespeicherte Sitzung. Beim Trennen kannst du
   wählen: nur ausblenden (angemeldet bleiben) oder komplett abmelden (Login-Daten löschen).
 
-## Starten
+## Download
+
+Fertige Installationsdateien für Windows, macOS und Linux gibt es unter
+[**Releases**](https://github.com/Luna-OS/moonify/releases/latest).
+
+## Aus dem Quellcode starten
 
 Voraussetzung: [Node.js](https://nodejs.org) 22 oder neuer.
 
@@ -77,6 +82,15 @@ enthält. Die Komponente wird beim ersten Start automatisch geladen.
   Webseiten, kann es sein, dass einzelne Infos (z. B. das Cover) kurz fehlen, bis Moonify angepasst ist.
 
 ## Entwicklung
+
+### Neues Release
+
+1. Version in `package.json` erhöhen (z. B. `npm version 0.2.0 --no-git-tag-version`).
+2. Abschnitt `## 0.2.0 – Datum` in `CHANGELOG.md` ergänzen.
+3. Nach dem Merge den Tag `v0.2.0` auf `main` pushen. Der Workflow *Release* baut dann alle
+   Installationsdateien und veröffentlicht das Release mit den Notizen aus dem Changelog.
+
+### Tests
 
 ```bash
 npm test        # Tests (Mondphasen, Einstellungen, Player-Logik, Anbieter-Regeln)
