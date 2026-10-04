@@ -1,17 +1,44 @@
 name: Release
 
-# Wird durch einen Versions-Tag (z. B. v0.1.0) ausgelöst:
+# Wird durch einen Versions-Tag (z. B. v0.1.0) oder manuell („Run workflow“) ausgelöst:
 # baut Moonify für Windows, macOS und Linux und veröffentlicht ein GitHub-Release.
+# Beim manuellen Start wird der Tag v<Version aus package.json> automatisch angelegt.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version bestimmen
+        id: version
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "Tag $GITHUB_REF_NAME passt nicht zur Version in package.json ($tag)"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" != "tag" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Releases werden nur von main erstellt (gestartet auf $GITHUB_REF)"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" != "tag" ] && git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "Release $tag existiert schon – bitte zuerst die Version in package.json erhöhen"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.os }})
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -23,14 +50,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Tag und package.json-Version vergleichen
-        shell: bash
-        run: |
-          version=$(node -p "require('./package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME passt nicht zur Version $version in package.json"
-            exit 1
-          fi
       - run: npm ci
       - run: npm test
       - name: Installationsdateien bauen
@@ -48,7 +67,7 @@ jobs:
             dist/*.deb
 
   release:
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,13 +76,17 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: Release-Notizen aus CHANGELOG.md
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           awk -v v="$version" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 > notes.md
-          test -s notes.md || echo "Moonify $GITHUB_REF_NAME" > notes.md
+          test -s notes.md || echo "Moonify $TAG" > notes.md
           cat notes.md
       - uses: softprops/action-gh-release@v2
         with:
-          name: Moonify ${{ github.ref_name }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Moonify ${{ needs.prepare.outputs.tag }}
           body_path: notes.md
           files: artifacts/*
