@@ -1,0 +1,57 @@
+{
+  "name": "moonify",
+  "productName": "Moonify",
+  "version": "0.1.0",
+  "description": "Spotify, YouTube Music und Amazon Music in einer App – unter einem Sternenhimmel.",
+  "type": "module",
+  "main": "src/main/main.js",
+  "author": "Luna",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
+    "start": "electron .",
+    "test": "node --test \"test/**/*.test.js\"",
+    "check": "node --check src/main/main.js && node --check src/main/preload.cjs && node --check src/main/webview-preload.cjs && node --check src/renderer/app.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "github:castlabs/electron-releases#v44.5.1+wvcus",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "os.luna.moonify",
+    "productName": "Moonify",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "electronDownload": {
+      "mirror": "https://github.com/castlabs/electron-releases/releases/download/v"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.png",
+      "category": "public.app-category.music"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Audio"
+    }
+  }
+}
