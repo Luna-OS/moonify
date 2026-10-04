@@ -29,9 +29,9 @@
       "assets/**/*",
       "package.json"
     ],
-    "electronDownload": {
-      "mirror": "https://github.com/castlabs/electron-releases/releases/download/v"
-    },
+    "electronDist": "node_modules/electron/dist",
+    "artifactName": "Moonify-${version}-${os}-${arch}.${ext}",
+    "publish": null,
     "win": {
       "target": "nsis",
       "icon": "assets/icon.png"
@@ -51,7 +51,14 @@
         "deb"
       ],
       "icon": "assets/icon.png",
-      "category": "Audio"
+      "category": "Audio",
+      "maintainer": "Luna-OS",
+      "synopsis": "Spotify, YouTube Music und Amazon Music in einer App"
     }
+  },
+  "homepage": "https://github.com/Luna-OS/moonify",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Luna-OS/moonify.git"
   }
 }
