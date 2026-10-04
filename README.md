@@ -87,8 +87,9 @@ enthält. Die Komponente wird beim ersten Start automatisch geladen.
 
 1. Version in `package.json` erhöhen (z. B. `npm version 0.2.0 --no-git-tag-version`).
 2. Abschnitt `## 0.2.0 – Datum` in `CHANGELOG.md` ergänzen.
-3. Nach dem Merge den Tag `v0.2.0` auf `main` pushen. Der Workflow *Release* baut dann alle
-   Installationsdateien und veröffentlicht das Release mit den Notizen aus dem Changelog.
+3. Nach dem Merge den Workflow *Release* unter *Actions* → *Run workflow* auf `main` starten
+   (oder den Tag `v0.2.0` pushen). Er baut alle Installationsdateien, legt den Tag an und
+   veröffentlicht das Release mit den Notizen aus dem Changelog.
 
 ### Tests
 
