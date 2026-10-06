@@ -19,5 +19,10 @@ export const icons = {
   open: wrap('<path d="M14 5h5v5M19 5l-8 8M17 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4"/>'),
   check: wrap('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
   sparkle: wrap('<path d="M12 3c.6 4.4 2.6 6.4 7 7-4.4.6-6.4 2.6-7 7-.6-4.4-2.6-6.4-7-7 4.4-.6 6.4-2.6 7-7z" class="fill"/>'),
+  library: wrap('<path d="M5 4v16M9.5 4v16"/><path d="m14 4.5 5 15"/>'),
+  settings: wrap('<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M4.2 6.5l2.6 1.5M17.2 16l2.6 1.5M4.2 17.5 6.8 16M17.2 8l2.6-1.5"/>'),
+  download: wrap('<path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/>'),
+  login: wrap('<path d="M10 17l5-5-5-5M15 12H4M14 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/>'),
+  window: wrap('<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9h17"/>'),
   note: wrap('<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>'),
 };

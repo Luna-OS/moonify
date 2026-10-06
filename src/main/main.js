@@ -1,8 +1,10 @@
-import { app, BrowserWindow, Menu, ipcMain, net, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, net, protocol, session } from 'electron';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PROVIDERS, getProvider, getProviderByPartition, isInAppUrl } from '../shared/providers.js';
+import { getProvider } from '../shared/providers.js';
+import { EngineManager, openExternal } from './engines.js';
+import { createUpdater } from './updater.js';
 
 // `components` gibt es nur in der Widevine-Version von Electron (castLabs).
 const require = createRequire(import.meta.url);
@@ -12,12 +14,15 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = path.resolve(HERE, '..');
 const SERVED_DIRS = [path.join(SRC_DIR, 'renderer'), path.join(SRC_DIR, 'shared')];
 const MAIN_PRELOAD = path.join(HERE, 'preload.cjs');
-const WEBVIEW_PRELOAD = path.join(HERE, 'webview-preload.cjs');
+const ENGINE_PRELOAD = path.join(HERE, 'engine-preload.cjs');
+const ICON = path.join(SRC_DIR, '..', 'assets', 'icon.png');
 const APP_URL = 'moonify://app/renderer/index.html';
 const BACKGROUND = '#070818';
 
 let mainWindow = null;
 let widevineReady = false;
+let engines = null;
+let updater = null;
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'moonify', privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true } },
@@ -34,13 +39,21 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(start);
 }
 
+app.on('before-quit', () => {
+  if (engines) engines.quitting = true;
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('activate', () => {
-  if (app.isReady() && BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (app.isReady() && !mainWindow) createWindow();
 });
+
+function sendToUi(channel, ...args) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+}
 
 async function start() {
   if (components) {
@@ -52,12 +65,13 @@ async function start() {
     }
   }
 
-  // Ohne „Electron/…“ im User-Agent lassen Google & Co. den Login zu.
-  const userAgent = cleanUserAgent(session.defaultSession.getUserAgent());
+  const nativeUserAgent = session.defaultSession.getUserAgent();
+  const userAgent = cleanUserAgent(nativeUserAgent);
   app.userAgentFallback = userAgent;
-  for (const provider of PROVIDERS) {
-    session.fromPartition(provider.partition).setUserAgent(userAgent);
-  }
+
+  engines = new EngineManager({ preload: ENGINE_PRELOAD, icon: ICON, send: sendToUi, nativeUserAgent });
+  engines.prepareSessions(userAgent);
+  updater = createUpdater((status) => sendToUi('update:status', status));
 
   registerAppProtocol();
   registerIpc();
@@ -93,7 +107,7 @@ function createWindow() {
     title: 'Moonify',
     backgroundColor: BACKGROUND,
     show: false,
-    icon: path.join(SRC_DIR, '..', 'assets', 'icon.png'),
+    icon: ICON,
     titleBarStyle: 'hidden',
     ...(isMac
       ? { trafficLightPosition: { x: 16, y: 15 } }
@@ -103,7 +117,7 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      webviewTag: true,
+      webviewTag: false,
       spellcheck: false,
     },
   });
@@ -117,81 +131,23 @@ function createWindow() {
     if (url !== APP_URL) event.preventDefault();
   });
 
-  // Jede eingebettete Anbieter-Ansicht wird hier abgesichert.
-  contents.on('will-attach-webview', (event, webPreferences, params) => {
-    const provider = getProviderByPartition(params.partition);
-    if (!provider || !params.src?.startsWith('https://')) {
-      event.preventDefault();
-      return;
-    }
-    delete webPreferences.preloadURL;
-    webPreferences.preload = WEBVIEW_PRELOAD;
-    webPreferences.nodeIntegration = false;
-    webPreferences.nodeIntegrationInSubFrames = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
-    webPreferences.backgroundThrottling = false;
-    webPreferences.webSecurity = true;
-  });
-
-  contents.on('did-attach-webview', (_event, guest) => {
-    const provider = getProviderByPartition(partitionOf(guest));
-    guest.setWindowOpenHandler(({ url }) => {
-      const inApp = provider ? isInAppUrl(provider, url) : PROVIDERS.some((p) => isInAppUrl(p, url));
-      if (inApp) {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            width: 520,
-            height: 760,
-            autoHideMenuBar: true,
-            backgroundColor: BACKGROUND,
-            parent: mainWindow,
-            webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
-          },
-        };
-      }
-      openExternal(url);
-      return { action: 'deny' };
-    });
-  });
-
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // Ohne Hauptfenster brauchen wir auch die Player im Hintergrund nicht mehr
+    engines.stopAll();
+    engines.quitting = false;
+    if (process.platform !== 'darwin') app.quit();
   });
   mainWindow.loadURL(APP_URL);
 }
 
-const guestPartitions = new WeakMap();
-
-function partitionOf(guest) {
-  if (guestPartitions.has(guest)) return guestPartitions.get(guest);
-  const match = PROVIDERS.find((p) => session.fromPartition(p.partition) === guest.session);
-  const partition = match ? match.partition : null;
-  guestPartitions.set(guest, partition);
-  return partition;
-}
-
-function openExternal(url) {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') shell.openExternal(parsed.toString());
-  } catch {
-    // ungültige URL ignorieren
-  }
-}
-
-async function isLoggedIn(provider) {
-  const cookies = await session.fromPartition(provider.partition).cookies.get({});
-  const now = Date.now() / 1000;
-  return cookies.some(
-    (c) => provider.loginCookies.includes(c.name) && c.value && (!c.expirationDate || c.expirationDate > now),
-  );
-}
-
 function fromMainWindow(event) {
   return mainWindow && event.sender === mainWindow.webContents;
+}
+
+function engineOptions(options) {
+  return { amazonRegion: typeof options?.amazonRegion === 'string' ? options.amazonRegion : undefined };
 }
 
 function registerIpc() {
@@ -200,33 +156,55 @@ function registerIpc() {
     return {
       platform: process.platform,
       version: app.getVersion(),
+      packaged: app.isPackaged,
       widevine: Boolean(components),
       widevineReady,
     };
   });
 
-  ipcMain.handle('moonify:login-status', async (event) => {
-    if (!fromMainWindow(event)) return {};
-    const entries = await Promise.all(
-      PROVIDERS.map(async (p) => [p.id, await isLoggedIn(p).catch(() => false)]),
-    );
-    return Object.fromEntries(entries);
-  });
+  ipcMain.handle('moonify:login-status', (event) => (fromMainWindow(event) ? engines.loginStatus() : {}));
 
-  ipcMain.handle('moonify:logout', async (event, id) => {
-    if (!fromMainWindow(event)) return false;
-    const provider = getProvider(id);
-    if (!provider) return false;
-    const ses = session.fromPartition(provider.partition);
-    await ses.clearStorageData();
-    await ses.clearCache();
-    await ses.clearAuthCache();
-    return true;
-  });
+  ipcMain.handle('moonify:logout', (event, id) => (fromMainWindow(event) ? engines.logout(String(id)) : false));
 
   ipcMain.handle('moonify:open-external', (event, url) => {
     if (fromMainWindow(event)) openExternal(url);
   });
+
+  // Unsichtbare Anbieter-Player
+  ipcMain.handle('engine:start', (event, id, options) => fromMainWindow(event) && engines.start(String(id), engineOptions(options)));
+  ipcMain.handle('engine:stop', (event, id) => {
+    if (fromMainWindow(event)) engines.stop(String(id));
+  });
+  ipcMain.handle('engine:show', (event, id, options) => fromMainWindow(event) && engines.show(String(id), { login: Boolean(options?.login) }));
+  ipcMain.handle('engine:home', (event, id, options) => {
+    if (!fromMainWindow(event) || !getProvider(String(id))) return false;
+    return engines.load(String(id), getProvider(String(id)).home(engineOptions(options)));
+  });
+  ipcMain.handle('engine:command', (event, id, command) => {
+    if (!fromMainWindow(event) || !command || typeof command.type !== 'string' || command.type === 'request') return false;
+    return engines.command(String(id), command);
+  });
+  ipcMain.handle('engine:request', (event, id, req) => {
+    if (!fromMainWindow(event) || !req || typeof req.type !== 'string') return { ok: false, error: 'Ungültige Anfrage' };
+    return engines.request(String(id), req);
+  });
+
+  // Nachrichten aus den Playern weiterreichen
+  ipcMain.on('engine:state', (event, json) => {
+    const id = engines.idForSender(event.sender);
+    if (id && typeof json === 'string') sendToUi('engine:state', id, json);
+  });
+  ipcMain.on('engine:ua-mode', (event) => {
+    event.returnValue = engines.uaModeForSender(event.sender);
+  });
+  ipcMain.on('engine:response', (event, rid, json) => {
+    engines.handleResponse(event.sender, String(rid), String(json));
+  });
+
+  // Updates
+  ipcMain.handle('update:check', (event) => (fromMainWindow(event) ? updater.check() : null));
+  ipcMain.handle('update:install', (event) => (fromMainWindow(event) ? updater.install() : false));
+  ipcMain.handle('update:status', (event) => (fromMainWindow(event) ? updater.status() : null));
 }
 
 function setupMenu() {

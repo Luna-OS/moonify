@@ -1,7 +1,7 @@
 {
   "name": "moonify",
   "productName": "Moonify",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Spotify, YouTube Music und Amazon Music in einer App – unter einem Sternenhimmel.",
   "type": "module",
   "main": "src/main/main.js",
@@ -11,7 +11,7 @@
     "postinstall": "node node_modules/electron/install.js",
     "start": "electron .",
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/main/main.js && node --check src/main/preload.cjs && node --check src/main/webview-preload.cjs && node --check src/renderer/app.js",
+    "check": "node --check src/main/main.js && node --check src/main/engines.js && node --check src/main/updater.js && node --check src/main/preload.cjs && node --check src/main/engine-preload.cjs && node --check src/renderer/app.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
@@ -31,7 +31,14 @@
     ],
     "electronDist": "node_modules/electron/dist",
     "artifactName": "Moonify-${version}-${os}-${arch}.${ext}",
-    "publish": null,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Luna-OS",
+        "repo": "moonify",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "assets/icon.png"
@@ -60,5 +67,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/Luna-OS/moonify.git"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }
