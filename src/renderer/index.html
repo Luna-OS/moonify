@@ -20,11 +20,6 @@
         <span class="brand-moon" id="brand-moon"></span>
         <span class="brand-name">Moonify</span>
       </div>
-      <div class="nav-buttons">
-        <button class="icon-btn" id="nav-back" title="Zurück" aria-label="Zurück" disabled></button>
-        <button class="icon-btn" id="nav-forward" title="Vor" aria-label="Vor" disabled></button>
-        <button class="icon-btn" id="nav-reload" title="Neu laden" aria-label="Neu laden" disabled></button>
-      </div>
       <form class="search" id="search-form" role="search" autocomplete="off">
         <span class="search-icon" id="search-icon"></span>
         <input id="search-input" type="search" placeholder="Suchen …" aria-label="Musik suchen" />
@@ -35,21 +30,21 @@
 
     <nav class="sidebar" aria-label="Navigation">
       <button class="nav-item" data-view="home" id="nav-home"></button>
-      <div class="nav-section">Deine Musik</div>
-      <div class="nav-providers" id="nav-providers"></div>
-      <div class="nav-empty" id="nav-empty">Noch kein Anbieter verbunden.</div>
+      <button class="nav-item" data-view="search" id="nav-search"></button>
+      <button class="nav-item" data-view="library" id="nav-library"></button>
+      <div class="nav-section">Deine Dienste</div>
+      <div class="nav-services" id="nav-services"></div>
       <div class="sidebar-spacer"></div>
-      <button class="nav-item nav-manage" data-view="providers" id="nav-manage"></button>
+      <button class="nav-item" data-view="settings" id="nav-settings"></button>
       <div class="tonight" id="tonight"></div>
     </nav>
 
     <main class="content" id="content">
       <section class="view" id="view-home" aria-label="Start"></section>
-      <section class="view" id="view-providers" aria-label="Anbieter verwalten"></section>
-      <section class="provider-stage" id="provider-stage" aria-label="Anbieter">
-        <div class="search-strip" id="search-strip" hidden></div>
-        <div class="webviews" id="webviews"></div>
-      </section>
+      <section class="view" id="view-search" aria-label="Suche"></section>
+      <section class="view" id="view-library" aria-label="Bibliothek"></section>
+      <section class="view" id="view-collection" aria-label="Playlist"></section>
+      <section class="view" id="view-settings" aria-label="Einstellungen"></section>
     </main>
 
     <footer class="player" id="player">
@@ -57,7 +52,7 @@
         <div class="now-art" id="now-art"></div>
         <div class="now-text">
           <div class="now-title" id="now-title">Nichts läuft gerade</div>
-          <div class="now-artist" id="now-artist">Starte Musik bei einem deiner Anbieter</div>
+          <div class="now-artist" id="now-artist">Suche einen Song und leg los</div>
           <button class="now-source" id="now-source" hidden></button>
         </div>
       </div>
@@ -78,6 +73,8 @@
         <input id="volume" class="star-range" type="range" min="0" max="100" step="1" aria-label="Lautstärke" />
       </div>
     </footer>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
 
     <div class="modal-backdrop" id="modal" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">

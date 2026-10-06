@@ -60,11 +60,14 @@ jobs:
         with:
           name: moonify-${{ matrix.os }}
           if-no-files-found: error
+          # latest*.yml und .blockmap braucht der Update-Button in der App
           path: |
             dist/*.exe
             dist/*.dmg
             dist/*.AppImage
             dist/*.deb
+            dist/*.blockmap
+            dist/latest*.yml
 
   release:
     needs: [prepare, build]
