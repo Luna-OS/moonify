@@ -32,6 +32,8 @@
       <button class="nav-item" data-view="home" id="nav-home"></button>
       <button class="nav-item" data-view="search" id="nav-search"></button>
       <button class="nav-item" data-view="library" id="nav-library"></button>
+      <div class="nav-section">Deine Playlists</div>
+      <div class="nav-playlists" id="nav-playlists"></div>
       <div class="nav-section">Deine Dienste</div>
       <div class="nav-services" id="nav-services"></div>
       <div class="sidebar-spacer"></div>
@@ -44,6 +46,7 @@
       <section class="view" id="view-search" aria-label="Suche"></section>
       <section class="view" id="view-library" aria-label="Bibliothek"></section>
       <section class="view" id="view-collection" aria-label="Playlist"></section>
+      <section class="view" id="view-queue" aria-label="Warteschlange"></section>
       <section class="view" id="view-settings" aria-label="Einstellungen"></section>
     </main>
 
@@ -51,7 +54,10 @@
       <div class="now">
         <div class="now-art" id="now-art"></div>
         <div class="now-text">
-          <div class="now-title" id="now-title">Nichts läuft gerade</div>
+          <div class="now-title-row">
+            <div class="now-title" id="now-title">Nichts läuft gerade</div>
+            <span class="now-heart" id="now-heart"></span>
+          </div>
           <div class="now-artist" id="now-artist">Suche einen Song und leg los</div>
           <button class="now-source" id="now-source" hidden></button>
         </div>
@@ -69,6 +75,7 @@
         </div>
       </div>
       <div class="volume">
+        <button class="icon-btn" id="btn-queue" aria-label="Warteschlange" title="Warteschlange"></button>
         <button class="icon-btn" id="btn-mute" aria-label="Stumm schalten" title="Stumm schalten"></button>
         <input id="volume" class="star-range" type="range" min="0" max="100" step="1" aria-label="Lautstärke" />
       </div>
@@ -80,6 +87,7 @@
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <h2 id="modal-title"></h2>
         <p id="modal-text"></p>
+        <div id="modal-input-slot"></div>
         <div class="modal-actions" id="modal-actions"></div>
       </div>
     </div>
