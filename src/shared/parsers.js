@@ -157,6 +157,31 @@ export function parseYtmTracks(json) {
   const tracks = [];
   const seen = new Set();
   walk(data, (o) => {
+    // „Top-Treffer“-Karte ganz oben in der Suche
+    const card = o.musicCardShelfRenderer;
+    if (card) {
+      const titleRun = card.title?.runs?.find((x) => x.navigationEndpoint?.watchEndpoint?.videoId);
+      const videoId = titleRun?.navigationEndpoint.watchEndpoint.videoId;
+      const type = titleRun?.navigationEndpoint.watchEndpoint.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig?.musicVideoType || '';
+      if (videoId && !seen.has(videoId) && !/PODCAST/.test(type)) {
+        seen.add(videoId);
+        const runs = card.subtitle?.runs || [];
+        const artists = runs.filter((x) => /ARTIST|USER_CHANNEL/.test(ytPageType(x))).map((x) => String(x.text).trim());
+        tracks.push({
+          provider: 'ytmusic',
+          kind: 'track',
+          id: videoId,
+          title: String(titleRun.text || '').trim(),
+          artist: artists.join(', '),
+          album: (runs.find((x) => /ALBUM/.test(ytPageType(x)))?.text || '').trim(),
+          duration: parseDuration(runs.map((x) => x.text?.trim()).find((t) => DURATION.test(t || '')) || ''),
+          image: ytThumbnail(card),
+          playable: true,
+          ref: { videoId },
+        });
+      }
+      return true; // in der Karte können weitere Songs stecken
+    }
     const r = o.musicResponsiveListItemRenderer;
     if (!r) return true;
     const videoId = ytVideoId(r);

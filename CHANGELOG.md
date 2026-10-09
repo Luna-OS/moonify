@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 – 2026-10-09
+
+Musik speichern – für alle Dienste gemeinsam 💛
+
+### Neu
+
+- **Lieblingssongs:** Herz an jedem Song und in der Playerleiste. Funktioniert mit Spotify, YouTube Music und Amazon Music – auch ohne Anmeldung.
+- **Eigene Playlists:** Anlegen, umbenennen, löschen, Songs hinzufügen, verschieben und entfernen. Songs aus verschiedenen Diensten lassen sich in einer Playlist mischen.
+- **Ganze Playlists der Dienste übernehmen:** In einer Spotify- oder YouTube-Music-Playlist „In Moonify speichern“ wählen.
+- **Warteschlange:** „Als Nächstes spielen“ und „Zur Warteschlange hinzufügen“ über das ⋯-Menü (oder Rechtsklick) bei jedem Song. Moonify spielt die Songs nacheinander ab – auch wenn sie von verschiedenen Diensten kommen. Vor/Zurück in der Playerleiste springt in der Warteschlange.
+- **Abspielen & Zufällig** für Moonify-Playlists.
+- **Zuletzt gehört:** Die letzten 50 Songs auf der Startseite und in der Bibliothek.
+- **Seitenleiste** zeigt deine Playlists.
+- **YouTube Music:** Der „Top-Treffer“ der Suche erscheint jetzt ebenfalls.
+
+### Hinweise
+
+- Gespeichertes liegt in Moonify auf deinem Computer – bei den Diensten selbst ändert sich nichts.
+- Songs von Diensten, die gerade nicht verbunden sind, bleiben gespeichert und werden beim Abspielen übersprungen.
+- Ab 0.2.0 kommt dieses Update über *Einstellungen → Updates*.
+
 ## 0.2.0 – 2026-10-06
 
 Moonify zeigt deine Musik jetzt im eigenen Sternen-Design statt der Webseiten der Dienste 🌙

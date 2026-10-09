@@ -74,9 +74,13 @@ test('Spotify-Bibliothek: Lieblingssongs, Playlists und Alben', () => {
 test('YouTube-Music-Suche: Videos werden zu abspielbaren Einträgen', () => {
   const tracks = parseYtmTracks(fixture('ytmusic-search.json'));
   assert.ok(tracks.length >= 3);
-  assert.equal(tracks[0].ref.videoId, '2fpIa30D6oM');
-  assert.equal(tracks[0].title, 'Clair de lune debussy');
-  assert.equal(tracks[0].artist, 'dindin.inparis');
+  // Der „Top-Treffer“ steht vorne
+  assert.equal(tracks[0].ref.videoId, 'CNXNLkqa3d4');
+  assert.equal(tracks[0].artist, 'Lullaby Baby');
+  assert.match(tracks[0].title, /Clair de Lune/);
+  assert.equal(tracks[1].ref.videoId, '2fpIa30D6oM');
+  assert.equal(tracks[1].title, 'Clair de lune debussy');
+  assert.equal(tracks[1].artist, 'dindin.inparis');
   // Podcast-Folgen sind keine Songs
   assert.ok(tracks.every((t) => !/Folge/.test(t.artist)));
   assert.ok(tracks.every((t) => t.image.startsWith('https://')));

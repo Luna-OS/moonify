@@ -15,6 +15,8 @@ import { icons } from './lib/icons.js';
 import { lunarPhase, moonSvg } from './lib/moon.js';
 import { MoonProgress } from './lib/moon-progress.js';
 import { PlayerHub } from './lib/player.js';
+import { LibraryStore, trackKey } from './lib/library-store.js';
+import { EndDetector, Queue, titlesMatch } from './lib/queue.js';
 import { enabledIds, loadSettings, saveSettings } from './lib/settings.js';
 import { startStarfield } from './lib/starfield.js';
 
@@ -52,6 +54,11 @@ const engineState = {};
 let view = { kind: 'home' };
 let progress;
 let updateStatus = { state: 'idle' };
+
+const store = new LibraryStore();
+const queue = new Queue();
+const endDetector = new EndDetector();
+let nowTrack = null; // Song, den Moonify zuletzt gestartet hat
 
 const search = { query: '', token: 0, filter: 'all', results: {} };
 const library = {};
@@ -115,28 +122,43 @@ function toast(message, kind = 'info') {
   setTimeout(() => node.remove(), 3700);
 }
 
-function openModal({ title, text, actions }) {
+function openModal({ title, text, actions, input = null }) {
   const modal = $('modal');
   $('modal-title').textContent = title;
   $('modal-text').textContent = text;
+  const field = input
+    ? h('input', { class: 'modal-input', type: 'text', maxlength: '120', placeholder: input.placeholder || '', 'aria-label': input.placeholder || title })
+    : null;
+  if (field) field.value = input.value || '';
+  $('modal-input-slot').replaceChildren(...(field ? [field] : []));
   const close = () => {
     modal.hidden = true;
   };
+  const primary = actions.find((a) => a.run && !a.danger) || actions.find((a) => a.run);
   $('modal-actions').replaceChildren(
     ...actions.map((a) =>
       h('button', {
         class: `btn ${a.danger ? 'danger' : a.run ? 'primary' : 'ghost'}`,
         onclick: () => {
           close();
-          a.run?.();
+          a.run?.(field ? field.value : undefined);
         },
       }, a.label)),
   );
+  if (field) {
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && primary) {
+        e.preventDefault();
+        close();
+        primary.run(field.value);
+      }
+    });
+  }
   modal.hidden = false;
   modal.onclick = (e) => {
     if (e.target === modal) close();
   };
-  modal.querySelector('.modal-actions button')?.focus();
+  (field || modal.querySelector('.modal-actions button'))?.focus();
 }
 
 /* ---------- Dienste ---------- */
@@ -196,42 +218,260 @@ async function request(id, req) {
   }
 }
 
-/* ---------- Abspielen ---------- */
+/* ---------- Abspielen & Warteschlange ---------- */
 
-async function playTrack(track, context = null) {
+function canPlay(track) {
+  return Boolean(settings.enabled[track.provider]) && track.playable !== false;
+}
+
+async function startTrack(track, context = null) {
   const provider = getProvider(track.provider);
-  if (!settings.enabled[provider.id]) return;
+  if (!settings.enabled[provider.id]) {
+    toast(`${provider.name} ist nicht verbunden – in den Einstellungen verbinden.`, 'error');
+    return false;
+  }
+  nowTrack = track;
+  store.addHistory(track);
   // Andere Dienste sofort pausieren, damit nichts übereinander läuft
   for (const other of connected()) if (other.id !== provider.id && hub.isPlaying(other.id)) api.engines.command(other.id, { type: 'pause' });
   toast(`„${track.title}“ wird über ${provider.short} gestartet …`);
   try {
     await request(provider.id, { type: 'play', track, context });
+    return true;
   } catch (err) {
     toast(`${provider.short}: ${err.message}`, 'error');
+    return false;
   }
 }
 
+/** Einzelner Song (Suche) oder Song aus einer Playlist eines Dienstes. */
+async function playTrack(track, context = null) {
+  if (context && context.provider === track.provider) {
+    // Der Dienst spielt seine Playlist selbst weiter
+    queue.clear();
+    endDetector.reset(null);
+  } else {
+    queue.playNow(track);
+    endDetector.reset(track);
+  }
+  return startTrack(track, context);
+}
+
+/** Liste in Moonifys Warteschlange abspielen – auch gemischt aus mehreren Diensten. */
+function playList(tracks, start = 0, { shuffle = false } = {}) {
+  const wanted = shuffle ? tracks : tracks.slice(start);
+  const list = wanted.filter(canPlay);
+  const skipped = wanted.length - list.length;
+  if (shuffle) {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+  }
+  if (!list.length) {
+    toast('Keiner dieser Songs kann gerade abgespielt werden – sind die Dienste verbunden?', 'error');
+    return;
+  }
+  if (skipped) toast(`${skipped} Song${skipped === 1 ? '' : 's'} übersprungen (Dienst nicht verbunden).`);
+  const first = queue.set(list, 0);
+  endDetector.reset(first);
+  startTrack(first);
+}
+
+function playNextInQueue() {
+  let next = queue.next();
+  while (next && !canPlay(next)) next = queue.next();
+  endDetector.reset(next);
+  if (next) startTrack(next);
+  renderQueueIfVisible();
+}
+
+function playPreviousInQueue() {
+  const previous = queue.previous();
+  endDetector.reset(previous);
+  if (previous) startTrack(previous);
+  renderQueueIfVisible();
+}
+
+function addToQueue(track, next = false) {
+  if (!canPlay(track)) {
+    toast(`${getProvider(track.provider).name} ist nicht verbunden.`, 'error');
+    return;
+  }
+  const started = next ? queue.playNext(track) : queue.add(track);
+  if (started) {
+    endDetector.reset(started);
+    startTrack(started);
+  } else {
+    toast(next ? `„${track.title}“ kommt als Nächstes.` : `„${track.title}“ ist in der Warteschlange.`, 'ok');
+  }
+  renderQueueIfVisible();
+}
+
 async function playCollection(item, tracks) {
-  if (tracks?.length) await playTrack(tracks[0], item);
+  if (!tracks?.length) return;
+  if (item.provider === 'moonify') playList(tracks, 0);
+  else await playTrack(tracks[0], item);
 }
 
 function isCurrent(track) {
   const current = hub.current();
-  return Boolean(current && current.id === track.provider && current.title && current.title.toLowerCase() === track.title.toLowerCase());
+  return Boolean(current && current.id === track.provider && current.title && titlesMatch(track.title, current.title));
+}
+
+/** Song, der gerade läuft – falls Moonify ihn gestartet hat (für Herz & Menü). */
+function currentKnownTrack() {
+  const current = hub.current();
+  if (!current || !nowTrack || current.id !== nowTrack.provider) return null;
+  return titlesMatch(nowTrack.title, current.title) ? nowTrack : null;
+}
+
+function toggleFavorite(track) {
+  const saved = store.toggleFavorite(track);
+  toast(saved ? `„${track.title}“ gespeichert ❤` : `„${track.title}“ aus Lieblingssongs entfernt`, saved ? 'ok' : 'info');
+}
+
+function heartButton(track, extraClass = '') {
+  const saved = store.isFavorite(track);
+  return h('button', {
+    class: `icon-btn heart${saved ? ' saved' : ''} ${extraClass}`,
+    title: saved ? 'Aus Lieblingssongs entfernen' : 'Zu Lieblingssongs hinzufügen',
+    'aria-label': saved ? 'Aus Lieblingssongs entfernen' : 'Zu Lieblingssongs hinzufügen',
+    'aria-pressed': String(saved),
+    html: saved ? icons.heartFilled : icons.heart,
+    onclick: (e) => {
+      e.stopPropagation();
+      toggleFavorite(track);
+    },
+  });
+}
+
+/* ---------- Kontextmenü ---------- */
+
+function closeMenu() {
+  document.getElementById('menu')?.remove();
+}
+
+function openMenu(anchor, entries) {
+  closeMenu();
+  const menu = h('div', { class: 'menu', id: 'menu', role: 'menu' },
+    entries.map((entry) => {
+      if (entry === '-') return h('div', { class: 'menu-sep' });
+      if (entry.label && !entry.run) return h('div', { class: 'menu-label' }, entry.label);
+      return h('button', {
+        class: `menu-item${entry.danger ? ' danger' : ''}`,
+        role: 'menuitem',
+        html: `${entry.icon || ''}<span></span>`,
+        onclick: (e) => {
+          e.stopPropagation();
+          closeMenu();
+          entry.run();
+        },
+      });
+    }));
+  // Texte sicher setzen (Playlist-Namen kommen vom Nutzer)
+  [...menu.querySelectorAll('.menu-item span')].forEach((span, i) => {
+    span.textContent = entries.filter((e) => e !== '-' && e.run)[i].text;
+  });
+  document.body.append(menu);
+  const rect = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  const left = Math.min(window.innerWidth - width - 12, Math.max(12, rect.right - width));
+  const top = rect.bottom + height + 8 > window.innerHeight ? Math.max(12, rect.top - height - 6) : rect.bottom + 6;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.querySelector('.menu-item')?.focus();
+}
+
+function playlistEntries(tracks) {
+  const list = Array.isArray(tracks) ? tracks : [tracks];
+  return [
+    { label: 'Zu Playlist hinzufügen' },
+    ...store.data.playlists.map((p) => ({
+      text: p.name,
+      icon: icons.library,
+      run: () => {
+        const added = store.addToPlaylist(p.id, list);
+        toast(added ? `${added === 1 ? `„${list[0].title}“` : `${added} Songs`} → „${p.name}“` : 'Ist schon in der Playlist.', added ? 'ok' : 'info');
+      },
+    })),
+    { text: 'Neue Playlist …', icon: icons.plus, run: () => createPlaylistDialog(list) },
+  ];
+}
+
+function trackMenu(anchor, track, context) {
+  const inMoonifyPlaylist = context?.provider === 'moonify' && context.kind === 'playlist';
+  const entries = [
+    { text: 'Als Nächstes spielen', icon: icons.next, run: () => addToQueue(track, true) },
+    { text: 'Zur Warteschlange hinzufügen', icon: icons.queue, run: () => addToQueue(track) },
+    { text: store.isFavorite(track) ? 'Aus Lieblingssongs entfernen' : 'Zu Lieblingssongs hinzufügen', icon: icons.heart, run: () => toggleFavorite(track) },
+    '-',
+    ...playlistEntries(track),
+  ];
+  if (inMoonifyPlaylist) {
+    entries.push('-',
+      { text: 'Nach oben', icon: icons.up, run: () => store.moveInPlaylist(context.id, trackKey(track), -1) },
+      { text: 'Nach unten', icon: icons.down, run: () => store.moveInPlaylist(context.id, trackKey(track), 1) },
+      { text: 'Aus dieser Playlist entfernen', icon: icons.close, danger: true, run: () => store.removeFromPlaylist(context.id, trackKey(track)) });
+  }
+  openMenu(anchor, entries);
+}
+
+function createPlaylistDialog(tracks = []) {
+  openModal({
+    title: 'Neue Playlist',
+    text: tracks.length ? `${tracks.length === 1 ? `„${tracks[0].title}“ wird` : `${tracks.length} Songs werden`} direkt hinzugefügt. Songs aus verschiedenen Diensten lassen sich mischen.` : 'Songs aus verschiedenen Diensten lassen sich mischen.',
+    input: { placeholder: 'Name der Playlist', value: '' },
+    actions: [
+      { label: 'Abbrechen' },
+      {
+        label: 'Erstellen',
+        run: (name) => {
+          const playlist = store.createPlaylist(name);
+          if (tracks.length) store.addToPlaylist(playlist.id, tracks);
+          toast(`Playlist „${playlist.name}“ erstellt`, 'ok');
+        },
+      },
+    ],
+  });
 }
 
 function trackList(tracks, context = null, { numbered = false } = {}) {
+  const moonify = context?.provider === 'moonify';
   return h('div', { class: 'track-list', role: 'list' },
     tracks.map((track, index) => {
       const provider = getProvider(track.provider);
       const current = isCurrent(track);
-      const play = () => playTrack(track, context);
+      const available = canPlay(track);
+      const play = () => {
+        if (!available) {
+          toast(`${provider.name} ist nicht verbunden – in den Einstellungen verbinden.`, 'error');
+          return;
+        }
+        if (moonify) playList(tracks, index);
+        else playTrack(track, context);
+      };
+      const menuButton = h('button', {
+        class: 'icon-btn tr-more',
+        title: 'Mehr',
+        'aria-label': 'Mehr Optionen',
+        html: icons.more,
+        onclick: (e) => {
+          e.stopPropagation();
+          trackMenu(e.currentTarget, track, context);
+        },
+      });
       return h('div', {
-        class: `track-row${current ? ' current' : ''}${track.playable === false ? ' disabled' : ''}`,
+        class: `track-row${current ? ' current' : ''}${available ? '' : ' disabled'}`,
         role: 'listitem',
         tabindex: '0',
-        title: track.playable === false ? 'Nicht verfügbar' : 'Abspielen',
+        title: available ? 'Abspielen' : `${provider.name} ist nicht verbunden`,
         onclick: play,
+        oncontextmenu: (e) => {
+          e.preventDefault();
+          trackMenu(menuButton, track, context);
+        },
         onkeydown: (e) => {
           if (e.key === 'Enter') play();
         },
@@ -246,7 +486,9 @@ function trackList(tracks, context = null, { numbered = false } = {}) {
         h('div', { class: 'tr-title' }, track.title || 'Unbekannter Titel'),
         h('div', { class: 'tr-sub' }, [track.artist, track.album].filter(Boolean).join(' · '))),
       providerTag(provider),
-      h('span', { class: 'tr-duration' }, track.duration ? formatTime(track.duration) : ''));
+      heartButton(track, 'tr-heart'),
+      h('span', { class: 'tr-duration' }, track.duration ? formatTime(track.duration) : ''),
+      menuButton);
     }));
 }
 
@@ -392,7 +634,50 @@ function renderLibraryViews() {
   if (view.kind === 'home') renderHomeShelf();
 }
 
+/* Moonifys eigene Sammlungen (Lieblingssongs, Playlists, Verlauf) */
+
+const songs = (n) => `${n} ${n === 1 ? 'Song' : 'Songs'}`;
+
+function moonifyItems() {
+  const items = [
+    { provider: 'moonify', kind: 'favorites', id: 'favorites', name: 'Lieblingssongs', subtitle: songs(store.data.favorites.length) },
+    ...store.data.playlists.map((p) => ({ provider: 'moonify', kind: 'playlist', id: p.id, name: p.name, subtitle: songs(p.tracks.length) })),
+  ];
+  if (store.data.history.length) items.push({ provider: 'moonify', kind: 'history', id: 'history', name: 'Zuletzt gehört', subtitle: songs(store.data.history.length) });
+  return items;
+}
+
+function moonifyTracks(item) {
+  if (item.kind === 'favorites') return store.data.favorites;
+  if (item.kind === 'history') return store.data.history;
+  return store.playlist(item.id)?.tracks || [];
+}
+
+function moonifyCover(item) {
+  if (item.kind === 'favorites') return h('div', { class: 'liked-art moon-liked', html: icons.heartFilled });
+  if (item.kind === 'history') return h('div', { class: 'liked-art moon-history', html: icons.reload });
+  const covers = moonifyTracks(item).map((t) => t.image).filter(Boolean).slice(0, 4);
+  if (covers.length >= 4) return h('div', { class: 'mosaic' }, covers.map((c) => art(c)));
+  if (covers.length) return art(covers[0]);
+  return h('div', { class: 'liked-art moon-playlist', html: moonSvg({ lit: 0.55, glow: false }) });
+}
+
+function moonifyCard(item) {
+  return h('button', { class: 'collection-card moonify', onclick: () => openCollection(item) },
+    h('div', { class: 'cc-art' }, moonifyCover(item)),
+    h('div', { class: 'cc-name' }, item.name),
+    h('div', { class: 'cc-sub' }, h('span', { class: 'provider-tag moon-tag' }, h('span', { class: 'dot' }), 'Moonify'), ` ${item.subtitle}`));
+}
+
+function newPlaylistCard() {
+  return h('button', { class: 'collection-card add-card', onclick: () => createPlaylistDialog() },
+    h('div', { class: 'cc-art' }, h('div', { class: 'add-art', html: icons.plus })),
+    h('div', { class: 'cc-name' }, 'Neue Playlist'),
+    h('div', { class: 'cc-sub' }, 'Songs aus allen Diensten mischen'));
+}
+
 function collectionCard(item) {
+  if (item.provider === 'moonify') return moonifyCard(item);
   const provider = getProvider(item.provider);
   return h('button', { class: 'collection-card', style: `--brand:${provider.color}`, onclick: () => openCollection(item) },
     h('div', { class: 'cc-art' }, item.id === 'liked' || item.id === 'VLLM' ? h('div', { class: 'liked-art', html: icons.sparkle }) : art(item.image)),
@@ -403,8 +688,12 @@ function collectionCard(item) {
 function renderLibrary() {
   const root = $('view-library');
   const list = connected();
+  const own = h('section', { class: 'lib-section' },
+    h('div', { class: 'section-head' }, h('span', { class: 'moon-badge', html: moonSvg({ lit: 0.72, glow: false }) }), h('h2', {}, 'In Moonify gespeichert')),
+    h('div', { class: 'collection-grid' }, moonifyItems().map(moonifyCard), newPlaylistCard()));
   if (!list.length) {
-    root.replaceChildren(page(emptyState('Noch kein Dienst verbunden', 'Verbinde deine Musikdienste in den Einstellungen, dann erscheinen hier deine Playlists und Lieblingssongs.', true)));
+    root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), own,
+      emptyState('Noch kein Dienst verbunden', 'Verbinde deine Musikdienste in den Einstellungen, dann erscheinen hier auch ihre Playlists und Lieblingssongs.', true)));
     return;
   }
   const sections = list.map((provider) => {
@@ -427,13 +716,18 @@ function renderLibrary() {
     }
     return h('section', { class: 'lib-section' }, head, h('div', { class: 'collection-grid' }, lib.items.map(collectionCard)));
   });
-  root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), sections));
+  root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), own, sections));
   for (const provider of list) if (provider.library && loginStatus[provider.id] && !library[provider.id]) loadLibrary(provider.id);
 }
 
 /* ---------- Playlist / Album ---------- */
 
 async function openCollection(item) {
+  if (item.provider === 'moonify') {
+    collection = { item, status: 'done', tracks: [] };
+    showView({ kind: 'collection' });
+    return;
+  }
   collection = { item, status: 'loading', tracks: [] };
   showView({ kind: 'collection' });
   try {
@@ -451,6 +745,10 @@ async function openCollection(item) {
 function renderCollection() {
   const root = $('view-collection');
   if (!collection) return;
+  if (collection.item.provider === 'moonify') {
+    renderMoonifyCollection(root, collection.item);
+    return;
+  }
   const { item, status, tracks, error } = collection;
   const provider = getProvider(item.provider);
   const total = tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
@@ -460,9 +758,15 @@ function renderCollection() {
       h('small', {}, item.kind === 'album' ? 'Album' : 'Playlist'),
       h('h1', {}, item.name),
       h('div', { class: 'ch-meta' }, providerTag(provider), item.subtitle ? ` ${item.subtitle}` : '',
-        status === 'done' ? ` · ${tracks.length} Songs${total ? ` · ${Math.round(total / 60)} Min.` : ''}` : ''),
+        status === 'done' ? ` · ${songs(tracks.length)}${total ? ` · ${Math.round(total / 60)} Min.` : ''}` : ''),
       h('div', { class: 'ch-actions' },
         h('button', { class: 'btn primary', disabled: !tracks.length, html: `${icons.play}<span>Abspielen</span>`, onclick: () => playCollection(item, tracks) }),
+        h('button', {
+          class: 'btn ghost',
+          disabled: !tracks.length,
+          html: `${icons.library}<span>In Moonify speichern</span>`,
+          onclick: (e) => openMenu(e.currentTarget, playlistEntries(tracks)),
+        }),
         h('button', { class: 'btn ghost', onclick: () => showView({ kind: 'library' }) }, 'Zurück'))));
   let body;
   if (status === 'loading') body = spinner('Songs werden geladen …');
@@ -470,6 +774,113 @@ function renderCollection() {
   else if (!tracks.length) body = emptyState('Leer', 'Hier sind noch keine Songs.');
   else body = trackList(tracks, item, { numbered: true });
   root.replaceChildren(page(header, body));
+}
+
+function renderMoonifyCollection(root, item) {
+  if (item.kind === 'playlist' && !store.playlist(item.id)) {
+    showView({ kind: 'library' });
+    return;
+  }
+  const tracks = moonifyTracks(item);
+  const name = item.kind === 'playlist' ? store.playlist(item.id).name : item.name;
+  const total = tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
+  const services = [...new Set(tracks.map((t) => t.provider))].map(getProvider);
+  const actions = [
+    h('button', { class: 'btn primary', disabled: !tracks.length, html: `${icons.play}<span>Abspielen</span>`, onclick: () => playList(tracks, 0) }),
+    h('button', { class: 'btn ghost', disabled: tracks.length < 2, html: `${icons.shuffle}<span>Zufällig</span>`, onclick: () => playList(tracks, 0, { shuffle: true }) }),
+  ];
+  if (item.kind === 'playlist') {
+    actions.push(
+      h('button', {
+        class: 'btn ghost',
+        html: `${icons.edit}<span>Umbenennen</span>`,
+        onclick: () => openModal({
+          title: 'Playlist umbenennen',
+          text: '',
+          input: { value: name, placeholder: 'Name der Playlist' },
+          actions: [{ label: 'Abbrechen' }, { label: 'Speichern', run: (value) => store.renamePlaylist(item.id, value) }],
+        }),
+      }),
+      h('button', {
+        class: 'btn ghost',
+        html: `${icons.trash}<span>Löschen</span>`,
+        onclick: () => openModal({
+          title: `„${name}“ löschen?`,
+          text: 'Die Playlist wird aus Moonify entfernt. Die Songs bei den Diensten bleiben unberührt.',
+          actions: [{ label: 'Abbrechen' }, { label: 'Löschen', danger: true, run: () => store.deletePlaylist(item.id) }],
+        }),
+      }));
+  }
+  if (item.kind === 'history' && tracks.length) {
+    actions.push(h('button', { class: 'btn ghost', html: `${icons.trash}<span>Verlauf leeren</span>`, onclick: () => store.clearHistory() }));
+  }
+  const header = h('div', { class: 'collection-header moonify' },
+    h('div', { class: 'ch-art' }, moonifyCover(item)),
+    h('div', { class: 'ch-text' },
+      h('small', {}, item.kind === 'history' ? 'Verlauf' : 'Moonify-Playlist'),
+      h('h1', {}, name),
+      h('div', { class: 'ch-meta' },
+        `${songs(tracks.length)}${total ? ` · ${Math.round(total / 60)} Min.` : ''}`,
+        services.length ? ' · ' : '',
+        services.map((p) => providerTag(p))),
+      h('div', { class: 'ch-actions' }, actions)));
+  let body;
+  if (!tracks.length) {
+    body = emptyState(
+      item.kind === 'favorites' ? 'Noch keine Lieblingssongs' : 'Noch leer',
+      item.kind === 'favorites'
+        ? 'Tippe bei einem Song auf das Herz, um ihn hier zu speichern.'
+        : 'Füge Songs über das ⋯-Menü bei einem Song hinzu – aus allen Diensten gemischt.',
+    );
+  } else {
+    body = trackList(tracks, { provider: 'moonify', kind: item.kind, id: item.id }, { numbered: item.kind !== 'history' });
+  }
+  root.replaceChildren(page(header, body));
+}
+
+/* ---------- Warteschlange ---------- */
+
+function renderQueueIfVisible() {
+  if (view.kind === 'queue') renderQueue();
+}
+
+function renderQueue() {
+  const root = $('view-queue');
+  const current = queue.current();
+  const upcoming = queue.upcoming();
+  const sections = [h('h1', { class: 'page-title' }, 'Warteschlange')];
+  if (!current) {
+    sections.push(emptyState('Die Warteschlange ist leer', 'Spiele eine Moonify-Playlist ab oder wähle bei einem Song „Zur Warteschlange hinzufügen“.'));
+  } else {
+    sections.push(h('h2', { class: 'section-title first' }, 'Läuft gerade'), trackList([current]));
+    sections.push(h('div', { class: 'section-head spaced' },
+      h('h2', {}, `Als Nächstes (${upcoming.length})`),
+      upcoming.length ? h('button', { class: 'link-btn', onclick: () => {
+        queue.items = [current];
+        queue.index = 0;
+        queue.changed();
+      } }, 'Leeren') : null));
+    if (upcoming.length) {
+      const list = trackList(upcoming, { provider: 'moonify', kind: 'queue', id: 'queue' });
+      // Entfernen-Knopf je Zeile
+      [...list.children].forEach((row, i) => {
+        row.append(h('button', {
+          class: 'icon-btn tr-remove',
+          title: 'Aus der Warteschlange entfernen',
+          'aria-label': 'Aus der Warteschlange entfernen',
+          html: icons.close,
+          onclick: (e) => {
+            e.stopPropagation();
+            queue.remove(i);
+          },
+        }));
+      });
+      sections.push(list);
+    } else {
+      sections.push(h('p', { class: 'section-sub' }, 'Danach ist Schluss – oder der Dienst spielt von selbst weiter.'));
+    }
+  }
+  root.replaceChildren(page(sections));
 }
 
 /* ---------- Startseite ---------- */
@@ -539,10 +950,19 @@ function renderHome() {
 function renderHomeShelf() {
   const shelf = $('home-shelf');
   if (!shelf) return;
+  const parts = [];
+  const recent = store.data.history.slice(0, 5);
+  if (recent.length) {
+    parts.push(h('div', { class: 'section-head spaced' }, h('h2', {}, 'Zuletzt gehört'),
+      h('button', { class: 'link-btn', onclick: () => openCollection({ provider: 'moonify', kind: 'history', id: 'history', name: 'Zuletzt gehört' }) }, 'Alle anzeigen')),
+    trackList(recent, { provider: 'moonify', kind: 'history', id: 'history' }));
+  }
+  const own = moonifyItems().filter((i) => i.kind !== 'history' && (i.kind !== 'favorites' || store.data.favorites.length));
   const items = interleave(connected().map((p) => (library[p.id]?.status === 'done' ? library[p.id].items : []))).slice(0, 10);
-  shelf.replaceChildren(...(items.length
-    ? [h('h2', { class: 'section-title' }, 'Aus deiner Bibliothek'), h('div', { class: 'collection-grid' }, items.map(collectionCard))]
-    : []));
+  if (own.length || items.length) {
+    parts.push(h('h2', { class: 'section-title' }, 'Deine Musik'), h('div', { class: 'collection-grid' }, own.map(moonifyCard), items.map(collectionCard)));
+  }
+  shelf.replaceChildren(...parts);
 }
 
 /* ---------- Einstellungen ---------- */
@@ -663,7 +1083,7 @@ function setUpdateStatus(status) {
 
 /* ---------- Navigation ---------- */
 
-const VIEWS = ['home', 'search', 'library', 'collection', 'settings'];
+const VIEWS = ['home', 'search', 'library', 'collection', 'queue', 'settings'];
 
 function showView(next) {
   view = next;
@@ -672,13 +1092,29 @@ function showView(next) {
   if (view.kind === 'search') renderSearch();
   if (view.kind === 'library') renderLibrary();
   if (view.kind === 'collection') renderCollection();
+  if (view.kind === 'queue') renderQueue();
   if (view.kind === 'settings') renderSettings();
   $(`view-${view.kind}`).scrollTop = 0;
+  closeMenu();
   renderSidebar();
 }
 
+function renderSidebarPlaylists() {
+  const openItem = view.kind === 'collection' && collection?.item.provider === 'moonify' ? collection.item.id : null;
+  const items = moonifyItems().filter((i) => i.kind !== 'history');
+  $('nav-playlists').replaceChildren(
+    ...items.map((item) => h('button', {
+      class: `nav-playlist${openItem === item.id ? ' active' : ''}`,
+      title: item.name,
+      onclick: () => openCollection(item),
+    }, h('span', { class: 'np-icon', html: item.kind === 'favorites' ? icons.heartFilled : icons.library }), h('span', { class: 'nav-label' }, item.name))),
+    h('button', { class: 'nav-playlist add', onclick: () => createPlaylistDialog() }, h('span', { class: 'np-icon', html: icons.plus }), h('span', { class: 'nav-label' }, 'Neue Playlist')),
+  );
+}
+
 function renderSidebar() {
-  const active = view.kind === 'collection' ? 'library' : view.kind;
+  renderSidebarPlaylists();
+  const active = view.kind === 'collection' ? (collection?.item.provider === 'moonify' ? '' : 'library') : view.kind;
   for (const name of ['home', 'search', 'library', 'settings']) $(`nav-${name}`).classList.toggle('active', active === name);
   const hasUpdate = ['ready', 'available'].includes(updateStatus?.state);
   $('nav-settings').classList.toggle('has-badge', hasUpdate);
@@ -764,8 +1200,18 @@ function renderPlayer(force = false) {
     play.setAttribute('aria-label', playing ? 'Pause' : 'Abspielen');
     play.title = playing ? 'Pause' : 'Abspielen';
   }
-  $('btn-prev').disabled = !current?.canPrev;
-  $('btn-next').disabled = !current?.canNext;
+  $('btn-prev').disabled = !(current?.canPrev || (queue.active && queue.index > 0));
+  $('btn-next').disabled = !(current?.canNext || (queue.active && queue.upcoming().length));
+  const known = currentKnownTrack();
+  const heartSlot = $('now-heart');
+  const heartKey = known ? `${trackKey(known)}:${store.isFavorite(known)}` : '';
+  if (heartSlot.dataset.key !== heartKey) {
+    heartSlot.dataset.key = heartKey;
+    heartSlot.replaceChildren(...(known ? [heartButton(known)] : []));
+  }
+  const queueCount = queue.upcoming().length;
+  $('btn-queue').classList.toggle('has-items', queueCount > 0);
+  $('btn-queue').title = queueCount ? `Warteschlange (${queueCount} als Nächstes)` : 'Warteschlange';
 
   const duration = current?.duration || 0;
   const position = current?.position || 0;
@@ -863,13 +1309,46 @@ function bindStaticUi() {
   });
 
   $('btn-play').addEventListener('click', togglePlay);
+  // Mit Moonify-Warteschlange: Moonify schaltet weiter, sonst der Dienst selbst
   $('btn-next').addEventListener('click', () => {
+    if (queue.active && queue.upcoming().length) {
+      playNextInQueue();
+      return;
+    }
     const c = hub.current();
     if (c) api.engines.command(c.id, { type: 'next' });
   });
   $('btn-prev').addEventListener('click', () => {
     const c = hub.current();
+    if (queue.active && queue.index > 0 && (!c || c.position < 5)) {
+      playPreviousInQueue();
+      return;
+    }
     if (c) api.engines.command(c.id, { type: 'prev' });
+  });
+  $('btn-queue').addEventListener('click', () => showView(view.kind === 'queue' ? { kind: 'home' } : { kind: 'queue' }));
+  $('btn-queue').innerHTML = icons.queue;
+
+  // Menüs schließen
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest?.('#menu')) closeMenu();
+  });
+  window.addEventListener('blur', closeMenu);
+  $('content').addEventListener('scroll', closeMenu, true);
+
+  // Gespeichertes geändert → betroffene Ansichten neu zeichnen
+  store.addEventListener('change', () => {
+    renderSidebarPlaylists();
+    renderPlayer();
+    if (view.kind === 'library') renderLibrary();
+    if (view.kind === 'collection') renderCollection();
+    if (view.kind === 'search') renderSearch();
+    if (view.kind === 'queue') renderQueue();
+    if (view.kind === 'home') renderHomeShelf();
+  });
+  queue.addEventListener('change', () => {
+    renderQueueIfVisible();
+    renderPlayer();
   });
   $('now-source').addEventListener('click', () => {
     const c = hub.current();
@@ -898,7 +1377,8 @@ function bindStaticUi() {
       $('search-input').focus();
       $('search-input').select();
     } else if (e.key === 'Escape') {
-      if (!$('modal').hidden) $('modal').hidden = true;
+      if (document.getElementById('menu')) closeMenu();
+      else if (!$('modal').hidden) $('modal').hidden = true;
       else if (document.activeElement === $('search-input')) $('search-input').blur();
     } else if (e.code === 'Space' && !typing && !(e.target instanceof HTMLButtonElement) && !e.target?.closest?.('.moon-progress, .track-row')) {
       e.preventDefault();
@@ -925,16 +1405,22 @@ function bindStaticUi() {
       rowsKey = nextRows;
       if (view.kind === 'search') renderSearch();
       if (view.kind === 'collection') renderCollection();
+      if (view.kind === 'queue') renderQueue();
+      if (view.kind === 'home') renderHomeShelf();
     }
   });
 
   api.engines.onState((id, json) => {
     if (!settings.enabled[id]) return;
+    let state;
     try {
-      hub.update(id, JSON.parse(json));
+      state = JSON.parse(json);
     } catch {
-      // kaputte Nachricht ignorieren
+      return; // kaputte Nachricht ignorieren
     }
+    hub.update(id, state);
+    // Song der Warteschlange zu Ende → nächsten starten (auch bei anderem Dienst)
+    if (queue.active && endDetector.observe(id, state)) playNextInQueue();
   });
   api.engines.onReady((id) => {
     engineState[id] = { ...(engineState[id] || {}), ready: true, error: null };

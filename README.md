@@ -19,6 +19,10 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
 - **Eine Suche für alles:** Ein Suchfeld (`Strg/⌘ + K`) durchsucht alle verbundenen Dienste
   gleichzeitig; Treffer werden gemischt angezeigt und lassen sich pro Dienst filtern.
 - **Bibliothek:** Playlists und Lieblingssongs von Spotify und YouTube Music (Amazon folgt).
+- **Speichern in Moonify:** Lieblingssongs (❤), eigene Playlists – auch gemischt aus mehreren
+  Diensten – und „Zuletzt gehört“. Funktioniert für alle Dienste gleich, auch ohne Anmeldung.
+- **Warteschlange:** „Als Nächstes spielen“ / „Zur Warteschlange hinzufügen“ über das ⋯-Menü;
+  Moonify spielt die Songs nacheinander, auch über Dienste hinweg.
 - **Eine Playerleiste für alle Dienste:** Titel, Künstler, Cover, Play/Pause, Vor/Zurück, Lautstärke.
 - **Mond-Fortschrittsleiste:** Der Regler ist ein Mond, der mit dem Song wächst – von der schmalen
   Sichel am Anfang bis zum Vollmond am Ende. Bedienbar per Maus (klicken/ziehen) und Tastatur (← →).
@@ -129,6 +133,8 @@ src/
     lib/moon-progress.js  Mond-Fortschrittsleiste
     lib/starfield.js      Animierter Sternenhimmel
     lib/player.js         Zusammenführung der Wiedergabe aller Dienste
+    lib/library-store.js  Lieblingssongs, eigene Playlists, Verlauf
+    lib/queue.js          Warteschlange & Erkennung des Song-Endes
   shared/providers.js     Anbieter-Definitionen
   shared/parsers.js       Macht aus den Daten der Dienste einheitliche Songs & Playlists
 ```
