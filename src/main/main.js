@@ -24,6 +24,12 @@ let widevineReady = false;
 let engines = null;
 let updater = null;
 
+// Die Player laufen in unsichtbaren Fenstern. Ohne diese Schalter drosselt Chromium
+// versteckte Fenster (weniger CPU, verzögerte Timer) – der Ton fängt dann an zu stocken.
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'moonify', privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true } },
 ]);
