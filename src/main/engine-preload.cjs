@@ -80,7 +80,7 @@ function moonifyEngine() {
 
   function adopt(element) {
     activeMedia = element;
-    applyVolume();
+    applyVolume(element);
   }
 
   function findMedia() {
@@ -89,10 +89,55 @@ function moonifyEngine() {
     return elements.find((e) => !e.paused) || activeMedia || elements.find((e) => e.duration > 0) || null;
   }
 
-  function applyVolume() {
-    if (desiredVolume === null) return;
-    const media = findMedia();
-    if (media && Math.abs(media.volume - desiredVolume) > 0.005) media.volume = desiredVolume;
+  /*
+   * Lautstärke ohne Gezerre: Die Dienste ändern ihre Lautstärke selbst (eigener Regler,
+   * Lautstärkeausgleich zwischen Songs). Würde Moonify sie ständig überschreiben, stellt
+   * der Dienst sie sofort zurück – der Ton springt hin und her und klingt abgehackt.
+   * Deshalb merkt sich Moonify den Wert des Dienstes und wendet seinen eigenen Regler nur
+   * als Faktor darauf an. Der Dienst liest weiterhin seinen eigenen Wert zurück.
+   */
+  const nativeVolume = Object.getOwnPropertyDescriptor(proto, 'volume');
+  const pageVolume = new WeakMap();
+  const knownMedia = new Set();
+
+  function volumeFactor() {
+    return desiredVolume === null ? 1 : desiredVolume;
+  }
+
+  function writeVolume(element) {
+    if (!pageVolume.has(element)) pageVolume.set(element, nativeVolume.get.call(element));
+    const target = Math.min(1, Math.max(0, pageVolume.get(element) * volumeFactor()));
+    if (Math.abs(nativeVolume.get.call(element) - target) > 0.001) nativeVolume.set.call(element, target);
+  }
+
+  if (nativeVolume && nativeVolume.get && nativeVolume.set) {
+    Object.defineProperty(proto, 'volume', {
+      configurable: true,
+      enumerable: nativeVolume.enumerable,
+      get() {
+        return pageVolume.has(this) ? pageVolume.get(this) : nativeVolume.get.call(this);
+      },
+      set(value) {
+        const number = Number(value);
+        // Ungültige Werte wie bisher vom Browser ablehnen lassen
+        if (!Number.isFinite(number) || number < 0 || number > 1) return nativeVolume.set.call(this, value);
+        pageVolume.set(this, number);
+        knownMedia.add(this);
+        writeVolume(this);
+      },
+    });
+  }
+
+  function applyVolume(element) {
+    if (!nativeVolume) return;
+    if (element) {
+      knownMedia.add(element);
+      writeVolume(element);
+      return;
+    }
+    const current = findMedia();
+    if (current) knownMedia.add(current);
+    for (const media of knownMedia) writeVolume(media);
   }
 
   function callHandler(action, details) {
@@ -162,7 +207,6 @@ function moonifyEngine() {
   }
 
   function tick() {
-    applyVolume();
     dismissInterruptions();
     let json;
     try {

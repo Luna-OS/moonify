@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 – 2026-10-16
+
+### Behoben
+
+- **Abgehackter Ton und springende Lautstärke:** Moonify hat die Lautstärke der Dienste zweimal pro Sekunde überschrieben. YouTube Music und Spotify gleichen ihre Lautstärke aber selbst an (eigener Regler, Lautstärkeausgleich zwischen Songs) und haben sie sofort zurückgestellt – dadurch sprang der Ton ständig zwischen leiser und lauter hin und her. Jetzt wirkt der Moonify-Regler als Faktor auf die Lautstärke des Dienstes, ohne gegeneinander zu arbeiten.
+- **Stockender Ton im Hintergrund:** Die unsichtbaren Player-Fenster werden nicht mehr von Chromium gedrosselt.
+
+Das Update kommt über *Einstellungen → Updates*.
+
 ## 0.3.0 – 2026-10-09
 
 Musik speichern – für alle Dienste gemeinsam 💛
