@@ -10,6 +10,7 @@ import {
   pickRelevant,
   ytmSongsChip,
 } from '../shared/parsers.js';
+import { activeLineIndex } from '../shared/lyrics.js';
 import { formatTime, greeting, safeImageUrl } from './lib/format.js';
 import { icons } from './lib/icons.js';
 import { lunarPhase, moonSvg } from './lib/moon.js';
@@ -28,6 +29,7 @@ const api = window.moonify || {
   loginStatus: async () => ({}),
   logout: async () => true,
   openExternal: async (url) => window.open(url, '_blank', 'noopener'),
+  lyrics: unavailable,
   engines: {
     start: async () => false,
     stop: async () => {},
@@ -63,6 +65,9 @@ let nowTrack = null; // Song, den Moonify zuletzt gestartet hat
 const search = { query: '', token: 0, filter: 'all', results: {} };
 const library = {};
 let collection = null;
+// Songtext zum laufenden Song (status: idle | loading | found | instrumental | none | error)
+const lyrics = { key: '', song: null, status: 'idle', data: null, timer: 0, lineIndex: -1, userScrollAt: 0 };
+let viewBeforeLyrics = { kind: 'home' };
 
 /* ---------- kleine DOM-Helfer ---------- */
 
@@ -883,6 +888,145 @@ function renderQueue() {
   root.replaceChildren(page(sections));
 }
 
+/* ---------- Songtexte ---------- */
+
+const lyricsKey = (current) => (current?.title ? `${current.title}\n${current.artist}` : '');
+
+/** Bei jedem Songwechsel im Hintergrund nach einem Songtext suchen. */
+function watchLyrics() {
+  const current = hub.current();
+  const key = lyricsKey(current);
+  if (key === lyrics.key) {
+    // Das Cover kommt oft erst nach dem Titel
+    if (key && current.artwork && lyrics.song && lyrics.song.artwork !== current.artwork) {
+      lyrics.song.artwork = current.artwork;
+      const slot = view.kind === 'lyrics' && $('view-lyrics').querySelector('.lh-art');
+      if (slot) slot.replaceChildren(art(current.artwork));
+    }
+    return;
+  }
+  clearTimeout(lyrics.timer);
+  Object.assign(lyrics, {
+    key,
+    song: current ? { id: current.id, title: current.title, artist: current.artist, artwork: current.artwork } : null,
+    status: key ? 'loading' : 'idle',
+    data: null,
+    lineIndex: -1,
+  });
+  // Kurz warten: beim Songwechsel kommen Titel, Künstler und Länge oft nacheinander an
+  if (key) lyrics.timer = setTimeout(() => loadLyrics(key), 800);
+  renderLyricsButton();
+  if (view.kind === 'lyrics') renderLyrics();
+}
+
+async function loadLyrics(key, attempt = 0) {
+  const current = hub.current();
+  if (lyricsKey(current) !== key) return;
+  let response;
+  try {
+    response = await api.lyrics({ title: current.title, artist: current.artist, duration: current.duration });
+  } catch {
+    response = { ok: false };
+  }
+  if (lyrics.key !== key) return; // inzwischen läuft ein anderer Song
+  if (response?.ok) {
+    const data = response.lyrics;
+    lyrics.data = data;
+    lyrics.status = !data ? 'none' : data.instrumental && !data.plain ? 'instrumental' : 'found';
+  } else {
+    lyrics.status = 'error';
+    // Kein Netz oder LRCLIB überlastet: später noch einmal versuchen
+    if (attempt < 2) lyrics.timer = setTimeout(() => loadLyrics(key, attempt + 1), 15000 * (attempt + 1));
+  }
+  renderLyricsButton();
+  if (view.kind === 'lyrics') renderLyrics();
+}
+
+/** Der Knopf erscheint nur, wenn es zum Song einen Songtext gibt. */
+function renderLyricsButton() {
+  const button = $('btn-lyrics');
+  const open = view.kind === 'lyrics';
+  button.hidden = !(open || lyrics.status === 'found');
+  button.classList.toggle('active', open);
+  button.title = open ? 'Songtext schließen' : 'Songtext';
+  button.setAttribute('aria-label', button.title);
+  button.setAttribute('aria-pressed', String(open));
+}
+
+function toggleLyrics() {
+  if (view.kind === 'lyrics') {
+    showView(viewBeforeLyrics);
+  } else {
+    viewBeforeLyrics = view;
+    showView({ kind: 'lyrics' });
+  }
+}
+
+function renderLyrics() {
+  const root = $('view-lyrics');
+  const { song, status, data } = lyrics;
+  const provider = song ? getProvider(song.id) : null;
+  const header = song
+    ? h('div', { class: 'lyrics-header' },
+      h('div', { class: 'lh-art' }, art(song.artwork)),
+      h('div', { class: 'lh-text' },
+        h('small', {}, 'Songtext'),
+        h('h1', {}, song.title),
+        h('div', { class: 'lh-meta' }, song.artist ? h('span', {}, song.artist) : null, provider ? providerTag(provider) : null)))
+    : null;
+  let body;
+  if (!song) {
+    body = emptyState('Nichts läuft gerade', 'Starte einen Song – gibt es einen Songtext dazu, erscheint er hier.');
+  } else if (status === 'loading' || status === 'idle') {
+    body = spinner('Songtext wird gesucht …');
+  } else if (status === 'error') {
+    body = h('div', { class: 'notice warn' }, 'Songtexte sind gerade nicht erreichbar. ',
+      h('button', { class: 'link-btn', onclick: () => {
+        lyrics.status = 'loading';
+        renderLyrics();
+        loadLyrics(lyrics.key, 2);
+      } }, 'Erneut versuchen'));
+  } else if (status === 'instrumental') {
+    body = emptyState('Instrumental', 'Dieser Song hat keinen Gesang – einfach zurücklehnen und zuhören.');
+  } else if (status === 'none') {
+    body = emptyState('Kein Songtext gefunden', 'Zu diesem Song gibt es leider noch keinen Songtext.');
+  } else if (data.synced) {
+    body = h('div', { class: 'lyric-lines' }, ...data.synced.map((line) => h('p', {
+      class: `lyric-line${line.text ? '' : ' gap'}`,
+      onclick: () => seekTo(line.time),
+    }, line.text || '♪')));
+  } else {
+    body = h('div', { class: 'lyrics-plain' }, data.plain);
+  }
+  const source = status === 'found'
+    ? h('p', { class: 'lyrics-source' }, data.synced ? 'Songtext von LRCLIB · Klick auf eine Zeile springt dorthin' : 'Songtext von LRCLIB')
+    : null;
+  const content = page(header, body, source);
+  content.classList.add('lyrics-page');
+  root.replaceChildren(content);
+  lyrics.lineIndex = -1;
+  updateLyricsLine(true);
+}
+
+/** Hebt die Zeile hervor, die gerade gesungen wird, und scrollt mit. */
+function updateLyricsLine(jump = false) {
+  if (view.kind !== 'lyrics' || lyrics.status !== 'found' || !lyrics.data?.synced) return;
+  const current = hub.current();
+  if (lyricsKey(current) !== lyrics.key) return;
+  const index = activeLineIndex(lyrics.data.synced, current.position);
+  if (index === lyrics.lineIndex && !jump) return;
+  lyrics.lineIndex = index;
+  const nodes = $('view-lyrics').querySelectorAll('.lyric-line');
+  nodes.forEach((node, i) => {
+    node.classList.toggle('active', i === index);
+    node.classList.toggle('past', i < index);
+  });
+  // Hat man gerade selbst gescrollt, nicht dazwischenfunken
+  if (nodes[index] && Date.now() - lyrics.userScrollAt > 4000) {
+    nodes[index].scrollIntoView({ block: 'center', behavior: jump ? 'auto' : 'smooth' });
+  }
+}
+
 /* ---------- Startseite ---------- */
 
 function emptyState(title, text, withSettings = false) {
@@ -1083,7 +1227,7 @@ function setUpdateStatus(status) {
 
 /* ---------- Navigation ---------- */
 
-const VIEWS = ['home', 'search', 'library', 'collection', 'queue', 'settings'];
+const VIEWS = ['home', 'search', 'library', 'collection', 'queue', 'lyrics', 'settings'];
 
 function showView(next) {
   view = next;
@@ -1093,10 +1237,12 @@ function showView(next) {
   if (view.kind === 'library') renderLibrary();
   if (view.kind === 'collection') renderCollection();
   if (view.kind === 'queue') renderQueue();
+  if (view.kind === 'lyrics') renderLyrics();
   if (view.kind === 'settings') renderSettings();
-  $(`view-${view.kind}`).scrollTop = 0;
+  if (view.kind !== 'lyrics') $(`view-${view.kind}`).scrollTop = 0;
   closeMenu();
   renderSidebar();
+  renderLyricsButton();
 }
 
 function renderSidebarPlaylists() {
@@ -1231,10 +1377,18 @@ function renderPlayer(force = false) {
     }
   }
   document.title = current?.title && playing ? `${current.title} · Moonify` : 'Moonify';
+  updateLyricsLine();
 }
 
 function setText(node, value) {
   if (node && node.textContent !== value) node.textContent = value;
+}
+
+function seekTo(time) {
+  const c = hub.current();
+  if (!c?.canSeek) return;
+  api.engines.command(c.id, { type: 'seek', time });
+  hub.patch(c.id, { position: time });
 }
 
 function togglePlay() {
@@ -1328,6 +1482,11 @@ function bindStaticUi() {
   });
   $('btn-queue').addEventListener('click', () => showView(view.kind === 'queue' ? { kind: 'home' } : { kind: 'queue' }));
   $('btn-queue').innerHTML = icons.queue;
+  $('btn-lyrics').addEventListener('click', toggleLyrics);
+  $('btn-lyrics').innerHTML = icons.lyrics;
+  for (const type of ['wheel', 'touchmove']) {
+    $('view-lyrics').addEventListener(type, () => { lyrics.userScrollAt = Date.now(); }, { passive: true });
+  }
 
   // Menüs schließen
   document.addEventListener('click', (e) => {
@@ -1361,14 +1520,7 @@ function bindStaticUi() {
     else setVolume(settings.volume, true);
   });
 
-  progress = new MoonProgress($('progress'), {
-    onSeek: (time) => {
-      const c = hub.current();
-      if (!c) return;
-      api.engines.command(c.id, { type: 'seek', time });
-      hub.patch(c.id, { position: time });
-    },
-  });
+  progress = new MoonProgress($('progress'), { onSeek: seekTo });
 
   document.addEventListener('keydown', (e) => {
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
@@ -1392,6 +1544,7 @@ function bindStaticUi() {
   let sidebarKey = '';
   let rowsKey = '';
   hub.addEventListener('change', () => {
+    watchLyrics();
     renderPlayer();
     const current = hub.current();
     const key = current ? `${current.id}:${current.playing}` : '';

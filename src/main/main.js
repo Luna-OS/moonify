@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, ipcMain, net, protocol, session } from 'elect
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createLyricsService } from '../shared/lyrics.js';
 import { getProvider } from '../shared/providers.js';
 import { EngineManager, openExternal } from './engines.js';
 import { createUpdater } from './updater.js';
@@ -23,6 +24,7 @@ let mainWindow = null;
 let widevineReady = false;
 let engines = null;
 let updater = null;
+let lyrics = null;
 
 // Die Player laufen in unsichtbaren Fenstern. Ohne diese Schalter drosselt Chromium
 // versteckte Fenster (weniger CPU, verzögerte Timer) – der Ton fängt dann an zu stocken.
@@ -78,6 +80,9 @@ async function start() {
   engines = new EngineManager({ preload: ENGINE_PRELOAD, icon: ICON, send: sendToUi, nativeUserAgent });
   engines.prepareSessions(userAgent);
   updater = createUpdater((status) => sendToUi('update:status', status));
+  lyrics = createLyricsService((url, init) => net.fetch(url, init), {
+    userAgent: `Moonify/${app.getVersion()} (https://github.com/Luna-OS/moonify)`,
+  });
 
   registerAppProtocol();
   registerIpc();
@@ -174,6 +179,22 @@ function registerIpc() {
 
   ipcMain.handle('moonify:open-external', (event, url) => {
     if (fromMainWindow(event)) openExternal(url);
+  });
+
+  // Songtexte (LRCLIB) – der Abruf läuft hier, die Oberfläche darf selbst nicht ins Netz
+  ipcMain.handle('moonify:lyrics', async (event, track) => {
+    if (!fromMainWindow(event) || typeof track?.title !== 'string') return { ok: false, error: 'Ungültige Anfrage' };
+    try {
+      const result = await lyrics({
+        title: track.title.slice(0, 300),
+        artist: typeof track.artist === 'string' ? track.artist.slice(0, 300) : '',
+        duration: Number(track.duration) || 0,
+      });
+      return { ok: true, lyrics: result };
+    } catch (err) {
+      console.error('Songtext konnte nicht geladen werden:', err);
+      return { ok: false, error: 'Songtexte sind gerade nicht erreichbar' };
+    }
   });
 
   // Unsichtbare Anbieter-Player
