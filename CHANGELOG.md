@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 – 2026-10-16
+
+Songtexte zum Mitsingen 🎤
+
+### Neu
+
+- **Songtext-Knopf** in der Playerleiste (Mikrofon neben der Warteschlange). Er erscheint nur, wenn es zum laufenden Song einen Songtext gibt.
+- **Mitlaufender Songtext:** Die Zeile, die gerade gesungen wird, leuchtet wie Mondlicht auf und die Ansicht scrollt mit. Ein Klick auf eine Zeile springt an diese Stelle im Song.
+- Gibt es nur einen Songtext ohne Zeitangaben, wird er komplett angezeigt.
+- Funktioniert für Spotify, YouTube Music und Amazon Music gleich. Zusätze wie „(Official Video)“ oder „- Remastered 2011“ werden für die Suche entfernt.
+
+### Hinweise
+
+- Die Songtexte kommen von [LRCLIB](https://lrclib.net), einer freien Songtext-Datenbank. Nicht jeder Song ist dort zu finden.
+- Moonify schickt dafür nur Titel, Künstler und Länge des Songs an LRCLIB.
+
 ## 0.3.1 – 2026-10-16
 
 ### Behoben

@@ -2182,3 +2182,125 @@ button.provider-card:hover .card-cta {
   justify-content: space-between;
   margin-top: 30px;
 }
+
+/* ---------- Songtext ---------- */
+
+#btn-lyrics.active {
+  color: var(--moon-warm);
+  background: rgba(255, 233, 179, 0.1);
+}
+
+.lyrics-page {
+  max-width: 820px;
+}
+
+.lyrics-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: -28px -32px 18px;
+  padding: 24px 32px 18px;
+  background: linear-gradient(180deg, rgba(9, 10, 30, 0.98) 0%, rgba(9, 10, 30, 0.95) 80%, rgba(9, 10, 30, 0) 100%);
+  backdrop-filter: blur(8px);
+}
+
+.lh-art {
+  width: 84px;
+  height: 84px;
+  flex: none;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #12142f;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45), 0 0 30px rgba(255, 233, 179, 0.12);
+}
+
+.lh-art img,
+.lh-art .art-placeholder {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.lh-text {
+  min-width: 0;
+}
+
+.lh-text small {
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.lh-text h1 {
+  margin: 4px 0 6px;
+  overflow: hidden;
+  font-size: 26px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lh-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.lyric-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12vh 0 38vh;
+}
+
+.lyric-line {
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 27px;
+  font-weight: 680;
+  line-height: 1.35;
+  color: rgba(238, 240, 255, 0.34);
+  cursor: pointer;
+  transform-origin: left center;
+  transition: color 0.35s, text-shadow 0.35s, transform 0.35s, background 0.15s;
+}
+
+.lyric-line:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(238, 240, 255, 0.7);
+}
+
+.lyric-line.past {
+  color: rgba(238, 240, 255, 0.52);
+}
+
+.lyric-line.active {
+  color: var(--moon);
+  text-shadow: 0 0 22px rgba(255, 233, 179, 0.55), 0 0 2px rgba(255, 244, 214, 0.6);
+  transform: scale(1.03);
+}
+
+.lyric-line.gap {
+  font-size: 22px;
+}
+
+.lyrics-plain {
+  padding: 8px 12px 40px;
+  font-size: 21px;
+  font-weight: 560;
+  line-height: 1.7;
+  color: rgba(238, 240, 255, 0.86);
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.lyrics-source {
+  margin: 0 12px 24px;
+  color: var(--faint);
+  font-size: 12.5px;
+}

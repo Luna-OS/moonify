@@ -24,6 +24,9 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
 - **Warteschlange:** „Als Nächstes spielen“ / „Zur Warteschlange hinzufügen“ über das ⋯-Menü;
   Moonify spielt die Songs nacheinander, auch über Dienste hinweg.
 - **Eine Playerleiste für alle Dienste:** Titel, Künstler, Cover, Play/Pause, Vor/Zurück, Lautstärke.
+- **Songtexte:** Gibt es zum laufenden Song einen Songtext, erscheint in der Playerleiste ein Mikrofon-Knopf.
+  Der Text läuft mit, die aktuelle Zeile leuchtet, und ein Klick auf eine Zeile springt dorthin
+  (Songtexte von [LRCLIB](https://lrclib.net)).
 - **Mond-Fortschrittsleiste:** Der Regler ist ein Mond, der mit dem Song wächst – von der schmalen
   Sichel am Anfang bis zum Vollmond am Ende. Bedienbar per Maus (klicken/ziehen) und Tastatur (← →).
 - **Nie zwei Songs gleichzeitig:** Startest du Musik bei einem Dienst, pausieren die anderen automatisch.
@@ -114,7 +117,7 @@ Moonify schickt den Google-Anmeldeseiten deshalb seine echte App-Kennung. Zeigt 
 ### Tests
 
 ```bash
-npm test        # Tests (Parser mit echten Beispieldaten, Mondphasen, Player-Logik, Updates …)
+npm test        # Tests (Parser mit echten Beispieldaten, Songtexte, Mondphasen, Player-Logik, Updates …)
 npm run check   # Syntax-Prüfung
 ```
 
@@ -137,6 +140,7 @@ src/
     lib/queue.js          Warteschlange & Erkennung des Song-Endes
   shared/providers.js     Anbieter-Definitionen
   shared/parsers.js       Macht aus den Daten der Dienste einheitliche Songs & Playlists
+  shared/lyrics.js        Songtexte suchen (LRCLIB) & Zeilen zeitlich zuordnen
 ```
 
 ## Lizenz

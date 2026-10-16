@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('moonify', {
   loginStatus: () => ipcRenderer.invoke('moonify:login-status'),
   logout: (id) => ipcRenderer.invoke('moonify:logout', String(id)),
   openExternal: (url) => ipcRenderer.invoke('moonify:open-external', String(url)),
+  lyrics: (track) => ipcRenderer.invoke('moonify:lyrics', track),
 
   engines: {
     start: (id, options) => ipcRenderer.invoke('engine:start', String(id), options || {}),
