@@ -1,22 +1,28 @@
 import { AMAZON_REGIONS, PROVIDERS, getProvider } from '../shared/providers.js';
 import {
+  emptySearch,
   interleave,
-  parseAmazonTracks,
+  parseAmazonSearch,
+  parseSpotifyArtist,
   parseSpotifyCollections,
+  parseSpotifySearch,
   parseSpotifyTracks,
+  parseYtmArtist,
   parseYtmChips,
   parseYtmCollections,
+  parseYtmSearch,
   parseYtmTracks,
   pickRelevant,
+  ytmPlaylistId,
   ytmSongsChip,
 } from '../shared/parsers.js';
-import { activeLineIndex } from '../shared/lyrics.js';
+import { activeLineIndex, normalizeName } from '../shared/lyrics.js';
 import { formatTime, greeting, safeImageUrl } from './lib/format.js';
 import { icons } from './lib/icons.js';
 import { lunarPhase, moonSvg } from './lib/moon.js';
 import { MoonProgress } from './lib/moon-progress.js';
 import { PlayerHub } from './lib/player.js';
-import { LibraryStore, trackKey } from './lib/library-store.js';
+import { LibraryStore, itemKey, trackKey } from './lib/library-store.js';
 import { EndDetector, Queue, titlesMatch } from './lib/queue.js';
 import { enabledIds, loadSettings, saveSettings } from './lib/settings.js';
 import { startStarfield } from './lib/starfield.js';
@@ -62,12 +68,14 @@ const queue = new Queue();
 const endDetector = new EndDetector();
 let nowTrack = null; // Song, den Moonify zuletzt gestartet hat
 
-const search = { query: '', token: 0, filter: 'all', results: {} };
+// type: Alles | Songs | Playlists | Alben | Künstler; filter: Dienst
+const search = { query: '', token: 0, filter: 'all', type: 'all', results: {} };
 const library = {};
-let collection = null;
+let collection = null; // geöffnete Playlist / geöffnetes Album
+let artistState = null; // geöffnete Künstlerseite
+const backStack = []; // für „Zurück“
 // Songtext zum laufenden Song (status: idle | loading | found | instrumental | none | error)
 const lyrics = { key: '', song: null, status: 'idle', data: null, timer: 0, lineIndex: -1, userScrollAt: 0 };
-let viewBeforeLyrics = { kind: 'home' };
 
 /* ---------- kleine DOM-Helfer ---------- */
 
@@ -319,6 +327,79 @@ async function playCollection(item, tracks) {
   else await playTrack(tracks[0], item);
 }
 
+/** Ganze Playlist, ganzes Album oder Künstler direkt beim Dienst starten (ohne Songliste). */
+async function startContext(item) {
+  const provider = getProvider(item.provider);
+  if (!settings.enabled[provider.id]) {
+    toast(`${provider.name} ist nicht verbunden – in den Einstellungen verbinden.`, 'error');
+    return false;
+  }
+  queue.clear();
+  endDetector.reset(null);
+  nowTrack = null;
+  for (const other of connected()) if (other.id !== provider.id && hub.isPlaying(other.id)) api.engines.command(other.id, { type: 'pause' });
+  toast(`„${item.name}“ wird über ${provider.short} gestartet …`);
+  try {
+    await request(provider.id, { type: 'play', track: null, context: { provider: item.provider, kind: item.kind, id: item.id, ref: item.ref } });
+    return true;
+  } catch (err) {
+    toast(`${provider.short}: ${err.message}`, 'error');
+    return false;
+  }
+}
+
+/** Kann der Abspiel-Knopf auf einer Kachel direkt starten? */
+function canQuickPlay(item) {
+  if (!settings.enabled[item.provider]) return false;
+  return !(item.kind === 'artist' && item.provider === 'amazon');
+}
+
+async function quickPlay(item) {
+  if (item.provider === 'ytmusic') {
+    // YouTube Music startet Playlists nur zuverlässig mit dem ersten Song – also erst die Songs laden
+    toast(`„${item.name}“ wird geladen …`);
+    try {
+      const tracks = item.kind === 'artist' ? (await loadArtistData(item)).tracks : await loadCollectionTracks(item);
+      if (!tracks.length) toast('Keine Songs gefunden.', 'error');
+      else if (item.kind === 'artist') playList(tracks);
+      else playTrack(tracks[0], item);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    return;
+  }
+  startContext(item);
+}
+
+/** Seite eines Dienstes im eigenen Fenster öffnen (z. B. Amazon-Künstler). */
+async function openInWindow(item) {
+  try {
+    await request(item.provider, { type: 'open', ref: item.ref });
+  } catch {
+    // Fenster trotzdem zeigen
+  }
+  api.engines.show(item.provider);
+}
+
+function openItem(item) {
+  if (item.provider !== 'moonify' && item.kind === 'artist') openArtist(item);
+  else openCollection(item);
+}
+
+function saveButton(item) {
+  const saved = store.isSaved(item);
+  return h('button', {
+    class: `btn ghost save-btn${saved ? ' saved' : ''}`,
+    'aria-pressed': String(saved),
+    title: saved ? 'Nicht mehr merken' : 'In der Bibliothek merken',
+    html: `${saved ? icons.bookmarkFilled : icons.bookmark}<span>${saved ? 'Gemerkt' : 'Merken'}</span>`,
+    onclick: () => {
+      const now = store.toggleSaved(item);
+      toast(now ? `„${item.name}“ gemerkt – du findest es in der Bibliothek.` : `„${item.name}“ nicht mehr gemerkt.`, now ? 'ok' : 'info');
+    },
+  });
+}
+
 function isCurrent(track) {
   const current = hub.current();
   return Boolean(current && current.id === track.provider && current.title && titlesMatch(track.title, current.title));
@@ -499,50 +580,149 @@ function trackList(tracks, context = null, { numbered = false } = {}) {
 
 /* ---------- Suche ---------- */
 
-function parseSearch(id, data) {
-  if (id === 'spotify') return parseSpotifyTracks(data);
-  if (id === 'ytmusic') return parseYtmTracks(data);
-  if (id === 'amazon') return parseAmazonTracks(data);
-  return [];
-}
+const SEARCH_TYPES = [
+  { id: 'all', label: 'Alles' },
+  { id: 'tracks', label: 'Songs' },
+  { id: 'playlists', label: 'Playlists' },
+  { id: 'albums', label: 'Alben' },
+  { id: 'artists', label: 'Künstler' },
+];
+const KIND_LABELS = { playlist: 'Playlist', album: 'Album', artist: 'Künstler' };
 
 async function searchProvider(id, query, token) {
-  search.results[id] = { status: 'loading', tracks: [] };
+  search.results[id] = { status: 'loading', more: 'idle', ...emptySearch() };
   renderSearchIfVisible();
+  let ok = false;
   try {
     const data = await request(id, { type: 'search', query });
-    let tracks = parseSearch(id, data);
-    if (id === 'ytmusic') {
+    let result;
+    if (id === 'spotify') {
+      result = { ...emptySearch(), tracks: parseSpotifyTracks(data) };
+    } else if (id === 'amazon') {
+      result = parseAmazonSearch(data);
+    } else {
+      result = parseYtmSearch(data);
       // Wenn es einen „Songs“-Filter gibt, lieber Songs statt Videos – aber nur, wenn sie zur Suche passen
       const chip = ytmSongsChip(parseYtmChips(data));
       if (chip) {
         const songs = await request(id, { type: 'search', query, params: chip.params }).then(parseYtmTracks).catch(() => []);
-        tracks = pickRelevant(songs, tracks, query);
+        result.tracks = pickRelevant(songs, result.tracks, query);
       }
     }
     if (token !== search.token) return;
-    search.results[id] = { status: 'done', tracks: tracks.slice(0, 40) };
+    search.results[id] = { ...result, status: 'done', more: id === 'spotify' ? 'loading' : 'done', tracks: result.tracks.slice(0, 40) };
+    ok = true;
   } catch (err) {
     if (token !== search.token) return;
-    search.results[id] = { status: 'error', tracks: [], error: err.message };
+    search.results[id] = { ...emptySearch(), status: 'error', more: 'done', error: err.message };
+  }
+  renderSearchIfVisible();
+  if (ok && id === 'spotify') loadSpotifyMore(query, token);
+}
+
+// Playlists, Alben und Künstler holt Spotify mit einer zweiten Abfrage – erst nach den Songs,
+// damit das Player-Fenster nicht zwei Seiten gleichzeitig öffnet.
+async function loadSpotifyMore(query, token) {
+  const entry = search.results.spotify;
+  try {
+    const all = parseSpotifySearch(await request('spotify', { type: 'searchAll', query }));
+    if (token !== search.token) return;
+    Object.assign(entry, { playlists: all.playlists, albums: all.albums, artists: all.artists, top: all.top, more: 'done' });
+    if (!entry.tracks.length) entry.tracks = all.tracks;
+  } catch {
+    if (token !== search.token) return;
+    entry.more = 'error';
   }
   renderSearchIfVisible();
 }
 
-function runSearch(query) {
+function runSearch(query, { type = 'all' } = {}) {
   const q = query.trim();
   if (!q) return;
   const list = connected();
   search.query = q;
   search.token += 1;
   search.results = {};
+  search.type = type;
   if (search.filter !== 'all' && !settings.enabled[search.filter]) search.filter = 'all';
+  $('search-input').value = q;
+  store.addSearch(q);
   showView({ kind: 'search' });
   for (const provider of list) searchProvider(provider.id, q, search.token);
 }
 
 function renderSearchIfVisible() {
   if (view.kind === 'search') renderSearch();
+}
+
+function bigSearchForm() {
+  return h('form', {
+    class: 'big-search',
+    onsubmit: (e) => {
+      e.preventDefault();
+      runSearch(e.target.elements.q.value);
+    },
+  },
+  h('span', { class: 'search-icon', html: icons.search }),
+  h('input', { name: 'q', type: 'search', placeholder: 'Song, Künstler, Album oder Playlist …', 'aria-label': 'Suchbegriff', autofocus: true }));
+}
+
+function recentSearches() {
+  const list = store.data.searches;
+  if (!list.length) return null;
+  return h('section', { class: 'recent-searches' },
+    h('div', { class: 'section-head spaced' },
+      h('h2', {}, 'Zuletzt gesucht'),
+      h('button', { class: 'link-btn', onclick: () => store.clearSearches() }, 'Verlauf löschen')),
+    h('div', { class: 'chips' }, list.map((q) => h('span', { class: 'chip recent' },
+      h('button', { class: 'recent-q', onclick: () => runSearch(q) }, h('span', { html: icons.search }), q),
+      h('button', { class: 'recent-x', title: 'Entfernen', 'aria-label': `„${q}“ entfernen`, html: icons.close, onclick: () => store.removeSearch(q) })))));
+}
+
+/** Bester Treffer: Künstler/Playlist/Album mit genau dem gesuchten Namen, sonst der Top-Treffer eines Dienstes. */
+function topResult(visible, found) {
+  const q = normalizeName(search.query);
+  const exact = [...found.artists, ...found.playlists, ...found.albums].find((i) => normalizeName(i.name) === q);
+  if (exact) return exact;
+  return visible.map((p) => search.results[p.id]?.top).find(Boolean) || null;
+}
+
+function topCard(item) {
+  const provider = getProvider(item.provider);
+  const subtitle = item.subtitle && item.subtitle !== KIND_LABELS[item.kind] ? item.subtitle : '';
+  return h('div', {
+    class: `top-card${item.kind === 'artist' ? ' artist' : ''}`,
+    style: `--brand:${provider.color}`,
+    role: 'button',
+    tabindex: '0',
+    onclick: () => openItem(item),
+    onkeydown: (e) => {
+      if (e.key === 'Enter') openItem(item);
+    },
+  },
+  h('div', { class: 'tc-art' }, art(item.image)),
+  h('div', { class: 'tc-name' }, item.name),
+  h('div', { class: 'tc-sub' }, h('span', { class: 'kind-pill' }, KIND_LABELS[item.kind] || ''), providerTag(provider), subtitle ? h('span', { class: 'tc-extra' }, subtitle) : null),
+  canQuickPlay(item) ? h('button', {
+    class: 'cc-play big',
+    title: 'Abspielen',
+    'aria-label': `${item.name} abspielen`,
+    html: icons.play,
+    onclick: (e) => {
+      e.stopPropagation();
+      quickPlay(item);
+    },
+  }) : null);
+}
+
+function rowHead(title, type, showAll) {
+  return h('div', { class: 'section-head spaced' },
+    h('h2', {}, title),
+    showAll ? h('button', { class: 'link-btn', onclick: () => setSearchType(type) }, 'Alle anzeigen') : null);
+}
+
+function cardRow(items) {
+  return h('div', { class: 'card-row' }, items.map(collectionCard));
 }
 
 function renderSearch() {
@@ -555,35 +735,40 @@ function renderSearch() {
   if (!search.query) {
     root.replaceChildren(page(
       h('h1', { class: 'page-title' }, 'Suchen'),
-      h('p', { class: 'section-sub' }, `Ein Suchfeld für ${list.map((p) => p.short).join(', ').replace(/, ([^,]*)$/, ' & $1')}.`),
-      h('form', {
-        class: 'big-search',
-        onsubmit: (e) => {
-          e.preventDefault();
-          runSearch(e.target.elements.q.value);
-        },
-      },
-      h('span', { class: 'search-icon', html: icons.search }),
-      h('input', { name: 'q', type: 'search', placeholder: 'Song, Künstler oder Album …', 'aria-label': 'Suchbegriff', autofocus: true })),
+      h('p', { class: 'section-sub' }, `Ein Suchfeld für ${list.map((p) => p.short).join(', ').replace(/, ([^,]*)$/, ' & $1')} – Songs, Playlists, Alben und Künstler.`),
+      bigSearchForm(),
+      recentSearches(),
     ));
     root.querySelector('input')?.focus();
     return;
   }
 
-  const counts = Object.fromEntries(list.map((p) => [p.id, search.results[p.id]?.tracks.length || 0]));
-  const anyLoading = list.some((p) => search.results[p.id]?.status === 'loading');
-  const chips = [
-    h('button', { class: `chip${search.filter === 'all' ? ' active' : ''}`, onclick: () => setFilter('all') },
-      'Alle', h('span', { class: 'chip-count' }, String(Object.values(counts).reduce((a, b) => a + b, 0)))),
-    ...list.map((p) => {
-      const r = search.results[p.id];
-      return h('button', { class: `chip${search.filter === p.id ? ' active' : ''}`, style: `--brand:${p.color}`, onclick: () => setFilter(p.id) },
-        h('span', { class: 'dot' }), p.short,
-        r?.status === 'loading' ? h('span', { class: 'chip-spin', html: moonSvg({ lit: 0.5, glow: false }) }) : h('span', { class: 'chip-count' }, String(counts[p.id])));
-    }),
-  ];
-
   const visible = search.filter === 'all' ? list : list.filter((p) => p.id === search.filter);
+  const pick = (key, providers = visible) => interleave(providers.map((p) => search.results[p.id]?.[key] || []));
+  const found = { tracks: pick('tracks'), playlists: pick('playlists'), albums: pick('albums'), artists: pick('artists') };
+  const loading = visible.some((p) => search.results[p.id]?.status === 'loading');
+  const loadingMore = visible.some((p) => search.results[p.id]?.more === 'loading');
+  const countOf = (type, providers = visible) => (type === 'all'
+    ? ['tracks', 'playlists', 'albums', 'artists'].reduce((n, key) => n + pick(key, providers).length, 0)
+    : pick(type, providers).length);
+  const busy = (type, providers = visible) => providers.some((p) => {
+    const r = search.results[p.id];
+    return r?.status === 'loading' || (type !== 'tracks' && r?.more === 'loading');
+  });
+
+  const tabs = h('div', { class: 'type-tabs', role: 'tablist' }, SEARCH_TYPES.map((t) => h('button', {
+    class: `type-tab${search.type === t.id ? ' active' : ''}`,
+    role: 'tab',
+    'aria-selected': String(search.type === t.id),
+    onclick: () => setSearchType(t.id),
+  }, t.label, t.id === 'all' ? null : busy(t.id) ? h('span', { class: 'chip-spin', html: moonSvg({ lit: 0.5, glow: false }) }) : h('span', { class: 'chip-count' }, String(countOf(t.id))))));
+
+  const chips = list.length > 1 ? h('div', { class: 'chips' },
+    h('button', { class: `chip${search.filter === 'all' ? ' active' : ''}`, onclick: () => setFilter('all') }, 'Alle Dienste'),
+    ...list.map((p) => h('button', { class: `chip${search.filter === p.id ? ' active' : ''}`, style: `--brand:${p.color}`, onclick: () => setFilter(p.id) },
+      h('span', { class: 'dot' }), p.short,
+      busy(search.type, [p]) ? h('span', { class: 'chip-spin', html: moonSvg({ lit: 0.5, glow: false }) }) : h('span', { class: 'chip-count' }, String(countOf(search.type, [p])))))) : null;
+
   const problems = visible
     .filter((p) => search.results[p.id]?.status === 'error')
     .map((p) => h('div', { class: 'notice warn small' },
@@ -591,25 +776,62 @@ function renderSearch() {
       h('button', { class: 'link-btn', onclick: () => searchProvider(p.id, search.query, search.token) }, 'Erneut versuchen'),
       ' · ',
       h('button', { class: 'link-btn', onclick: () => api.engines.show(p.id) }, 'Im Fenster öffnen')));
-  const tracks = interleave(visible.map((p) => search.results[p.id]?.tracks || []));
 
   let body;
-  if (tracks.length) body = trackList(tracks);
-  else if (anyLoading) body = spinner('Suche läuft …');
-  else if (!problems.length) body = emptyState('Keine Treffer', `Für „${search.query}“ wurde nichts gefunden.`);
-  else body = null;
+  if (search.type === 'all') {
+    body = renderSearchAll(visible, found, loading, loadingMore);
+  } else if (search.type === 'tracks') {
+    body = found.tracks.length ? trackList(found.tracks) : null;
+  } else {
+    body = found[search.type].length ? h('div', { class: 'collection-grid' }, found[search.type].map(collectionCard)) : null;
+  }
+  if (!body) {
+    const label = SEARCH_TYPES.find((t) => t.id === search.type).label;
+    body = busy(search.type) ? spinner('Suche läuft …') : problems.length ? null : emptyState('Keine Treffer', search.type === 'all' ? `Für „${search.query}“ wurde nichts gefunden.` : `Keine ${label} für „${search.query}“ gefunden.`);
+  }
 
   root.replaceChildren(page(
-    h('h1', { class: 'page-title' }, h('span', { class: 'muted' }, 'Ergebnisse für '), `„${search.query}“`),
-    h('div', { class: 'chips' }, chips),
+    h('div', { class: 'search-head' },
+      h('h1', { class: 'page-title' }, h('span', { class: 'muted' }, 'Ergebnisse für '), `„${search.query}“`),
+      h('button', { class: 'link-btn', onclick: () => {
+        search.query = '';
+        $('search-input').value = '';
+        renderSearch();
+      } }, 'Neue Suche')),
+    tabs,
+    chips,
     problems,
     body,
   ));
 }
 
+function renderSearchAll(visible, found, loading, loadingMore) {
+  const parts = [];
+  const top = topResult(visible, found);
+  const songCount = top ? 4 : 6;
+  const songs = found.tracks.length ? trackList(found.tracks.slice(0, songCount)) : null;
+  if (top || songs) {
+    parts.push(h('div', { class: `search-top${top ? '' : ' no-top'}` },
+      top ? h('section', { class: 'top-hit' }, h('h2', { class: 'row-title' }, 'Top-Treffer'), topCard(top)) : null,
+      songs ? h('section', { class: 'top-songs' }, rowHead('Songs', 'tracks', found.tracks.length > songCount), songs) : null));
+  }
+  for (const [key, title] of [['playlists', 'Playlists'], ['albums', 'Alben'], ['artists', 'Künstler']]) {
+    const items = found[key].filter((i) => i !== top);
+    if (items.length) parts.push(h('section', { class: 'search-row' }, rowHead(title, key, items.length > 6), cardRow(items.slice(0, 12))));
+  }
+  if (parts.length && (loading || loadingMore)) parts.push(h('div', { class: 'search-more' }, spinner('Weitere Treffer werden geladen …')));
+  return parts.length ? parts : null;
+}
+
 function setFilter(filter) {
   search.filter = filter;
   renderSearch();
+}
+
+function setSearchType(type) {
+  search.type = type;
+  renderSearch();
+  $('view-search').scrollTop = 0;
 }
 
 /* ---------- Bibliothek ---------- */
@@ -681,13 +903,37 @@ function newPlaylistCard() {
     h('div', { class: 'cc-sub' }, 'Songs aus allen Diensten mischen'));
 }
 
+/** Kachel für Playlists, Alben und Künstler der Dienste (mit Abspiel-Knopf). */
 function collectionCard(item) {
   if (item.provider === 'moonify') return moonifyCard(item);
   const provider = getProvider(item.provider);
-  return h('button', { class: 'collection-card', style: `--brand:${provider.color}`, onclick: () => openCollection(item) },
-    h('div', { class: 'cc-art' }, item.id === 'liked' || item.id === 'VLLM' ? h('div', { class: 'liked-art', html: icons.sparkle }) : art(item.image)),
-    h('div', { class: 'cc-name' }, item.name),
-    h('div', { class: 'cc-sub' }, providerTag(provider), item.subtitle && item.subtitle !== provider.name ? ` ${item.subtitle}` : ''));
+  const liked = item.id === 'liked' || item.id === 'VLLM';
+  const sub = item.kind === 'artist' ? 'Künstler' : item.subtitle && item.subtitle !== provider.name ? item.subtitle : '';
+  return h('div', {
+    class: `collection-card${item.kind === 'artist' ? ' artist' : ''}`,
+    style: `--brand:${provider.color}`,
+    role: 'button',
+    tabindex: '0',
+    title: item.name,
+    onclick: () => openItem(item),
+    onkeydown: (e) => {
+      if (e.key === 'Enter' && e.target === e.currentTarget) openItem(item);
+    },
+  },
+  h('div', { class: 'cc-art' },
+    liked ? h('div', { class: 'liked-art', html: icons.sparkle }) : art(item.image),
+    canQuickPlay(item) ? h('button', {
+      class: 'cc-play',
+      title: 'Abspielen',
+      'aria-label': `${item.name} abspielen`,
+      html: icons.play,
+      onclick: (e) => {
+        e.stopPropagation();
+        quickPlay(item);
+      },
+    }) : null),
+  h('div', { class: 'cc-name' }, item.name),
+  h('div', { class: 'cc-sub' }, providerTag(provider), sub ? ` ${sub}` : ''));
 }
 
 function renderLibrary() {
@@ -696,8 +942,13 @@ function renderLibrary() {
   const own = h('section', { class: 'lib-section' },
     h('div', { class: 'section-head' }, h('span', { class: 'moon-badge', html: moonSvg({ lit: 0.72, glow: false }) }), h('h2', {}, 'In Moonify gespeichert')),
     h('div', { class: 'collection-grid' }, moonifyItems().map(moonifyCard), newPlaylistCard()));
+  const saved = store.data.saved.length
+    ? h('section', { class: 'lib-section' },
+      h('div', { class: 'section-head' }, h('span', { class: 'moon-badge', html: icons.bookmarkFilled }), h('h2', {}, 'Gemerkt')),
+      h('div', { class: 'collection-grid' }, store.data.saved.map(collectionCard)))
+    : null;
   if (!list.length) {
-    root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), own,
+    root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), own, saved,
       emptyState('Noch kein Dienst verbunden', 'Verbinde deine Musikdienste in den Einstellungen, dann erscheinen hier auch ihre Playlists und Lieblingssongs.', true)));
     return;
   }
@@ -721,64 +972,135 @@ function renderLibrary() {
     }
     return h('section', { class: 'lib-section' }, head, h('div', { class: 'collection-grid' }, lib.items.map(collectionCard)));
   });
-  root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), own, sections));
+  root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), own, saved, sections));
   for (const provider of list) if (provider.library && loginStatus[provider.id] && !library[provider.id]) loadLibrary(provider.id);
 }
 
 /* ---------- Playlist / Album ---------- */
 
-async function openCollection(item) {
-  if (item.provider === 'moonify') {
-    collection = { item, status: 'done', tracks: [] };
-    showView({ kind: 'collection' });
-    return;
+function openCollection(item) {
+  const state = { item, status: 'loading', tracks: [], filter: '' };
+  if (item.provider === 'moonify') state.status = 'done';
+  // Amazon zeigt Album- und Playlist-Seiten nur angemeldet im eigenen Fenster
+  else if (item.provider === 'amazon') state.status = 'unsupported';
+  showView({ kind: 'collection', state });
+  if (state.status === 'loading') loadCollection(state);
+}
+
+/** Songs einer Playlist / eines Albums beim Dienst laden. */
+async function loadCollectionTracks(item) {
+  const data = await request(item.provider, { type: 'collection', ref: item.ref });
+  let tracks = item.provider === 'spotify' ? parseSpotifyTracks(data) : parseYtmTracks(data);
+  // Ohne playlistId spielt YouTube Music nur den einen Song statt des Albums
+  if (item.provider === 'ytmusic' && !item.ref.playlistId) item.ref = { ...item.ref, playlistId: ytmPlaylistId(data) };
+  if (item.kind === 'album') {
+    // Songs eines Albums haben oft kein eigenes Cover und keinen Künstler
+    const artist = item.artistName || albumArtist(item.subtitle);
+    tracks = tracks.map((t) => ({ ...t, image: t.image || item.image, artist: t.artist || artist, album: t.album || item.name }));
   }
-  collection = { item, status: 'loading', tracks: [] };
-  showView({ kind: 'collection' });
+  return tracks;
+}
+
+async function loadCollection(state) {
+  state.status = 'loading';
   try {
-    const data = await request(item.provider, { type: 'collection', ref: item.ref });
-    if (collection?.item !== item) return;
-    const tracks = item.provider === 'spotify' ? parseSpotifyTracks(data) : parseYtmTracks(data);
-    collection = { item, status: 'done', tracks };
+    state.tracks = await loadCollectionTracks(state.item);
+    state.status = 'done';
   } catch (err) {
-    if (collection?.item !== item) return;
-    collection = { item, status: 'error', tracks: [], error: err.message };
+    state.status = 'error';
+    state.error = err.message;
   }
-  if (view.kind === 'collection') renderCollection();
+  if (view.kind === 'collection' && collection === state) renderCollection();
+}
+
+/** „Coldplay · 2000“ → „Coldplay“ (aber nicht „Album · 2000“). */
+function albumArtist(subtitle) {
+  const first = String(subtitle || '').split(/\s[•·]\s/)[0].trim();
+  return /^(\d{4}|album|single|ep|compilation)$/i.test(first) ? '' : first;
+}
+
+function matchesFilter(track, query) {
+  const q = normalizeName(query);
+  if (!q) return true;
+  return normalizeName(`${track.title} ${track.artist} ${track.album}`).includes(q);
+}
+
+/** Suchfeld innerhalb einer langen Liste; aktualisiert nur die Liste darunter. */
+function filteredTracks(state, tracks, renderList) {
+  const slot = h('div', { class: 'filtered' });
+  const fill = () => {
+    const shown = tracks.filter((t) => matchesFilter(t, state.filter));
+    slot.replaceChildren(shown.length ? renderList(shown) : h('p', { class: 'section-sub' }, `Nichts gefunden für „${state.filter}“.`));
+  };
+  fill();
+  if (tracks.length < 12) return [slot];
+  const input = h('input', {
+    class: 'filter-input',
+    type: 'search',
+    placeholder: 'In dieser Liste suchen …',
+    'aria-label': 'In dieser Liste suchen',
+    oninput: (e) => {
+      state.filter = e.target.value;
+      fill();
+    },
+  });
+  input.value = state.filter || '';
+  return [h('label', { class: 'filter-box' }, h('span', { html: icons.search }), input), slot];
+}
+
+/** Neu zeichnen, ohne dass das Suchfeld der Liste den Fokus verliert. */
+function keepFilterFocus(root, render) {
+  const focused = document.activeElement?.classList.contains('filter-input') && root.contains(document.activeElement);
+  render();
+  if (focused) {
+    const input = root.querySelector('.filter-input');
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  }
 }
 
 function renderCollection() {
   const root = $('view-collection');
   if (!collection) return;
   if (collection.item.provider === 'moonify') {
-    renderMoonifyCollection(root, collection.item);
+    keepFilterFocus(root, () => renderMoonifyCollection(root, collection.item));
     return;
   }
-  const { item, status, tracks, error } = collection;
+  const state = collection;
+  const { item, status, tracks, error } = state;
   const provider = getProvider(item.provider);
   const total = tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
+  const liked = item.id === 'liked' || item.id === 'VLLM';
+  const actions = status === 'unsupported'
+    ? [
+      h('button', { class: 'btn primary', disabled: !settings.enabled[item.provider], html: `${icons.play}<span>Abspielen</span>`, onclick: () => startContext(item) }),
+      h('button', { class: 'btn ghost', html: `${icons.window}<span>Im Fenster öffnen</span>`, onclick: () => openInWindow(item) }),
+    ]
+    : [
+      h('button', { class: 'btn primary', disabled: !tracks.length, html: `${icons.play}<span>Abspielen</span>`, onclick: () => playCollection(item, tracks) }),
+      h('button', {
+        class: 'btn ghost',
+        disabled: !tracks.length,
+        html: `${icons.library}<span>In Moonify speichern</span>`,
+        onclick: (e) => openMenu(e.currentTarget, playlistEntries(tracks)),
+      }),
+    ];
+  if (!liked) actions.push(saveButton(item));
   const header = h('div', { class: 'collection-header', style: `--brand:${provider.color}` },
-    h('div', { class: 'ch-art' }, item.id === 'liked' || item.id === 'VLLM' ? h('div', { class: 'liked-art', html: icons.sparkle }) : art(item.image)),
+    h('div', { class: 'ch-art' }, liked ? h('div', { class: 'liked-art', html: icons.sparkle }) : art(item.image)),
     h('div', { class: 'ch-text' },
       h('small', {}, item.kind === 'album' ? 'Album' : 'Playlist'),
       h('h1', {}, item.name),
       h('div', { class: 'ch-meta' }, providerTag(provider), item.subtitle ? ` ${item.subtitle}` : '',
         status === 'done' ? ` · ${songs(tracks.length)}${total ? ` · ${Math.round(total / 60)} Min.` : ''}` : ''),
-      h('div', { class: 'ch-actions' },
-        h('button', { class: 'btn primary', disabled: !tracks.length, html: `${icons.play}<span>Abspielen</span>`, onclick: () => playCollection(item, tracks) }),
-        h('button', {
-          class: 'btn ghost',
-          disabled: !tracks.length,
-          html: `${icons.library}<span>In Moonify speichern</span>`,
-          onclick: (e) => openMenu(e.currentTarget, playlistEntries(tracks)),
-        }),
-        h('button', { class: 'btn ghost', onclick: () => showView({ kind: 'library' }) }, 'Zurück'))));
+      h('div', { class: 'ch-actions' }, actions)));
   let body;
   if (status === 'loading') body = spinner('Songs werden geladen …');
-  else if (status === 'error') body = h('div', { class: 'notice warn' }, error);
+  else if (status === 'error') body = h('div', { class: 'notice warn' }, error, ' ', h('button', { class: 'link-btn', onclick: () => { loadCollection(state); renderCollection(); } }, 'Erneut versuchen'));
+  else if (status === 'unsupported') body = h('div', { class: 'notice' }, `Die Songliste kann Moonify bei ${provider.name} noch nicht anzeigen. „Abspielen“ startet ${item.kind === 'album' ? 'das ganze Album' : 'die ganze Playlist'} direkt bei ${provider.short}.`);
   else if (!tracks.length) body = emptyState('Leer', 'Hier sind noch keine Songs.');
-  else body = trackList(tracks, item, { numbered: true });
-  root.replaceChildren(page(header, body));
+  else body = filteredTracks(state, tracks, (shown) => trackList(shown, item, { numbered: shown.length === tracks.length }));
+  keepFilterFocus(root, () => root.replaceChildren(page(backButton(), header, body)));
 }
 
 function renderMoonifyCollection(root, item) {
@@ -838,9 +1160,94 @@ function renderMoonifyCollection(root, item) {
         : 'Füge Songs über das ⋯-Menü bei einem Song hinzu – aus allen Diensten gemischt.',
     );
   } else {
-    body = trackList(tracks, { provider: 'moonify', kind: item.kind, id: item.id }, { numbered: item.kind !== 'history' });
+    body = filteredTracks(collection, tracks, (shown) => trackList(shown, { provider: 'moonify', kind: item.kind, id: item.id }, { numbered: item.kind !== 'history' && shown.length === tracks.length }));
   }
-  root.replaceChildren(page(header, body));
+  root.replaceChildren(page(backButton(), header, body));
+}
+
+/* ---------- Künstler ---------- */
+
+async function loadArtistData(item) {
+  const data = await request(item.provider, { type: 'artist', ref: item.ref });
+  const result = item.provider === 'spotify' ? parseSpotifyArtist(data) : parseYtmArtist(data);
+  if (!result) throw new Error('Die Künstlerseite konnte nicht gelesen werden');
+  const name = item.name || result.artist.name;
+  for (const album of result.albums) album.artistName = name;
+  return result;
+}
+
+function openArtist(item) {
+  const state = { item, status: item.provider === 'amazon' ? 'unsupported' : 'loading', data: null, error: '' };
+  showView({ kind: 'artist', state });
+  if (state.status === 'loading') loadArtist(state);
+}
+
+async function loadArtist(state) {
+  state.status = 'loading';
+  try {
+    state.data = await loadArtistData(state.item);
+    state.status = 'done';
+  } catch (err) {
+    state.status = 'error';
+    state.error = err.message;
+  }
+  if (view.kind === 'artist' && artistState === state) renderArtist();
+}
+
+function renderArtist() {
+  const state = artistState;
+  if (!state) return;
+  const { item, status, data } = state;
+  const provider = getProvider(item.provider);
+  const info = data?.artist || {};
+  const tracks = data?.tracks || [];
+  const subtitle = info.subtitle && info.subtitle !== 'Künstler' ? info.subtitle : item.subtitle && item.subtitle !== 'Künstler' ? item.subtitle : '';
+  const actions = status === 'unsupported'
+    ? [
+      h('button', { class: 'btn primary', html: `${icons.window}<span>Im Fenster öffnen</span>`, onclick: () => openInWindow(item) }),
+      h('button', { class: 'btn ghost', html: `${icons.search}<span>Songs suchen</span>`, onclick: () => {
+        search.filter = item.provider;
+        runSearch(item.name);
+      } }),
+    ]
+    : [
+      h('button', {
+        class: 'btn primary',
+        disabled: !tracks.length || !settings.enabled[item.provider],
+        html: `${icons.play}<span>Abspielen</span>`,
+        // Spotify spielt Künstler selbst (mit Radio danach), sonst Moonifys Warteschlange
+        onclick: () => (item.provider === 'spotify' ? startContext(item) : playList(tracks)),
+      }),
+      h('button', { class: 'btn ghost', disabled: tracks.length < 2, html: `${icons.shuffle}<span>Zufällig</span>`, onclick: () => playList(tracks, 0, { shuffle: true }) }),
+    ];
+  actions.push(saveButton(item));
+  const header = h('div', { class: 'collection-header artist-header', style: `--brand:${provider.color}` },
+    h('div', { class: 'ch-art round' }, art(item.image || info.image)),
+    h('div', { class: 'ch-text' },
+      h('small', {}, 'Künstler'),
+      h('h1', {}, item.name || info.name),
+      h('div', { class: 'ch-meta' }, providerTag(provider), subtitle ? ` ${subtitle}` : ''),
+      h('div', { class: 'ch-actions' }, actions)));
+  let body;
+  if (status === 'loading') {
+    body = spinner('Künstlerseite wird geladen …');
+  } else if (status === 'error') {
+    body = h('div', { class: 'notice warn' }, state.error, ' ', h('button', { class: 'link-btn', onclick: () => { loadArtist(state); renderArtist(); } }, 'Erneut versuchen'));
+  } else if (status === 'unsupported') {
+    body = h('div', { class: 'notice' }, `Künstlerseiten zeigt ${provider.name} nur im eigenen Fenster. Öffne sie dort – oder such hier nach Songs von ${item.name}.`);
+  } else {
+    body = [];
+    if (tracks.length) {
+      body.push(h('h2', { class: 'section-title first' }, 'Beliebte Songs'),
+        // Abspielen über Moonifys Warteschlange: der Reihe nach durch die beliebten Songs
+        trackList(tracks.slice(0, 10), { provider: 'moonify', kind: 'artist', id: item.id }, { numbered: true }));
+    }
+    for (const [key, title] of [['albums', 'Alben & Singles'], ['playlists', 'Playlists'], ['related', 'Ähnliche Künstler']]) {
+      if (data[key]?.length) body.push(h('h2', { class: 'section-title' }, title), cardRow(data[key].slice(0, 20)));
+    }
+    if (!body.length) body = emptyState('Nichts gefunden', 'Zu diesem Künstler gibt es hier gerade keine Songs.');
+  }
+  $('view-artist').replaceChildren(page(backButton(), header, body));
 }
 
 /* ---------- Warteschlange ---------- */
@@ -954,12 +1361,8 @@ function renderLyricsButton() {
 }
 
 function toggleLyrics() {
-  if (view.kind === 'lyrics') {
-    showView(viewBeforeLyrics);
-  } else {
-    viewBeforeLyrics = view;
-    showView({ kind: 'lyrics' });
-  }
+  if (view.kind === 'lyrics') goBack();
+  else showView({ kind: 'lyrics' });
 }
 
 function renderLyrics() {
@@ -1102,9 +1505,10 @@ function renderHomeShelf() {
     trackList(recent, { provider: 'moonify', kind: 'history', id: 'history' }));
   }
   const own = moonifyItems().filter((i) => i.kind !== 'history' && (i.kind !== 'favorites' || store.data.favorites.length));
+  const saved = store.data.saved.slice(0, 6);
   const items = interleave(connected().map((p) => (library[p.id]?.status === 'done' ? library[p.id].items : []))).slice(0, 10);
-  if (own.length || items.length) {
-    parts.push(h('h2', { class: 'section-title' }, 'Deine Musik'), h('div', { class: 'collection-grid' }, own.map(moonifyCard), items.map(collectionCard)));
+  if (own.length || saved.length || items.length) {
+    parts.push(h('h2', { class: 'section-title' }, 'Deine Musik'), h('div', { class: 'collection-grid' }, own.map(moonifyCard), saved.map(collectionCard), items.map(collectionCard)));
   }
   shelf.replaceChildren(...parts);
 }
@@ -1227,40 +1631,84 @@ function setUpdateStatus(status) {
 
 /* ---------- Navigation ---------- */
 
-const VIEWS = ['home', 'search', 'library', 'collection', 'queue', 'lyrics', 'settings'];
+const VIEWS = ['home', 'search', 'library', 'collection', 'artist', 'queue', 'lyrics', 'settings'];
 
-function showView(next) {
+const sameView = (a, b) => a.kind === b.kind && a.state === b.state;
+
+/** Ansicht wechseln. Die vorige Ansicht kommt auf den „Zurück“-Stapel (außer beim Zurückgehen). */
+function showView(next, { back = false } = {}) {
+  const leaving = view;
+  if (!sameView(leaving, next)) {
+    leaving.scroll = $(`view-${leaving.kind}`).scrollTop;
+    if (!back && leaving.kind !== 'lyrics') {
+      backStack.push(leaving);
+      if (backStack.length > 40) backStack.shift();
+    }
+  }
   view = next;
+  if (view.kind === 'collection' && view.state) collection = view.state;
+  if (view.kind === 'artist' && view.state) artistState = view.state;
   for (const name of VIEWS) $(`view-${name}`).classList.toggle('active', view.kind === name);
   if (view.kind === 'home') renderHome();
   if (view.kind === 'search') renderSearch();
   if (view.kind === 'library') renderLibrary();
   if (view.kind === 'collection') renderCollection();
+  if (view.kind === 'artist') renderArtist();
   if (view.kind === 'queue') renderQueue();
   if (view.kind === 'lyrics') renderLyrics();
   if (view.kind === 'settings') renderSettings();
-  if (view.kind !== 'lyrics') $(`view-${view.kind}`).scrollTop = 0;
+  if (view.kind !== 'lyrics' && !sameView(leaving, next)) $(`view-${view.kind}`).scrollTop = back ? view.scroll || 0 : 0;
   closeMenu();
   renderSidebar();
   renderLyricsButton();
 }
 
+function goBack() {
+  let previous = backStack.pop();
+  // Inzwischen gelöschte Moonify-Playlists überspringen
+  while (previous?.kind === 'collection' && previous.state?.item.provider === 'moonify' && previous.state.item.kind === 'playlist' && !store.playlist(previous.state.item.id)) {
+    previous = backStack.pop();
+  }
+  showView(previous || { kind: 'home' }, { back: true });
+}
+
+function backButton() {
+  return h('button', { class: 'back-btn', title: 'Zurück (Alt + ←)', 'aria-label': 'Zurück', html: `${icons.back}<span>Zurück</span>`, onclick: goBack });
+}
+
+function openViewKey() {
+  if (view.kind === 'collection' && collection) return collection.item.provider === 'moonify' ? `moonify:${collection.item.id}` : itemKey(collection.item);
+  if (view.kind === 'artist' && artistState) return itemKey(artistState.item);
+  return '';
+}
+
 function renderSidebarPlaylists() {
-  const openItem = view.kind === 'collection' && collection?.item.provider === 'moonify' ? collection.item.id : null;
+  const open = openViewKey();
   const items = moonifyItems().filter((i) => i.kind !== 'history');
   $('nav-playlists').replaceChildren(
     ...items.map((item) => h('button', {
-      class: `nav-playlist${openItem === item.id ? ' active' : ''}`,
+      class: `nav-playlist${open === `moonify:${item.id}` ? ' active' : ''}`,
       title: item.name,
       onclick: () => openCollection(item),
     }, h('span', { class: 'np-icon', html: item.kind === 'favorites' ? icons.heartFilled : icons.library }), h('span', { class: 'nav-label' }, item.name))),
+    // Gemerkte Playlists, Alben und Künstler der Dienste
+    ...store.data.saved.slice(0, 30).map((item) => h('button', {
+      class: `nav-playlist saved${open === itemKey(item) ? ' active' : ''}`,
+      title: `${item.name} · ${getProvider(item.provider).name}`,
+      style: `--brand:${getProvider(item.provider).color}`,
+      onclick: () => openItem(item),
+    }, h('span', { class: `np-icon np-art${item.kind === 'artist' ? ' round' : ''}` }, art(item.image)), h('span', { class: 'nav-label' }, item.name), h('span', { class: 'np-dot' }))),
     h('button', { class: 'nav-playlist add', onclick: () => createPlaylistDialog() }, h('span', { class: 'np-icon', html: icons.plus }), h('span', { class: 'nav-label' }, 'Neue Playlist')),
   );
 }
 
 function renderSidebar() {
   renderSidebarPlaylists();
-  const active = view.kind === 'collection' ? (collection?.item.provider === 'moonify' ? '' : 'library') : view.kind;
+  const open = openViewKey();
+  const inSidebar = open && (open.startsWith('moonify:') || store.data.saved.some((i) => itemKey(i) === open));
+  // Playlist/Künstler: den Bereich markieren, aus dem man gekommen ist (Suche, Bibliothek …)
+  const origin = [...backStack].reverse().find((v) => !['collection', 'artist', 'lyrics'].includes(v.kind))?.kind || '';
+  const active = view.kind === 'collection' || view.kind === 'artist' ? (inSidebar ? '' : origin) : view.kind;
   for (const name of ['home', 'search', 'library', 'settings']) $(`nav-${name}`).classList.toggle('active', active === name);
   const hasUpdate = ['ready', 'available'].includes(updateStatus?.state);
   $('nav-settings').classList.toggle('has-badge', hasUpdate);
@@ -1488,6 +1936,14 @@ function bindStaticUi() {
     $('view-lyrics').addEventListener(type, () => { lyrics.userScrollAt = Date.now(); }, { passive: true });
   }
 
+  // Maustaste „Zurück“
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 3) {
+      e.preventDefault();
+      goBack();
+    }
+  });
+
   // Menüs schließen
   document.addEventListener('click', (e) => {
     if (!e.target.closest?.('#menu')) closeMenu();
@@ -1497,13 +1953,14 @@ function bindStaticUi() {
 
   // Gespeichertes geändert → betroffene Ansichten neu zeichnen
   store.addEventListener('change', () => {
-    renderSidebarPlaylists();
     renderPlayer();
     if (view.kind === 'library') renderLibrary();
     if (view.kind === 'collection') renderCollection();
+    if (view.kind === 'artist') renderArtist();
     if (view.kind === 'search') renderSearch();
     if (view.kind === 'queue') renderQueue();
     if (view.kind === 'home') renderHomeShelf();
+    renderSidebar();
   });
   queue.addEventListener('change', () => {
     renderQueueIfVisible();
@@ -1528,6 +1985,9 @@ function bindStaticUi() {
       e.preventDefault();
       $('search-input').focus();
       $('search-input').select();
+    } else if (e.altKey && e.key === 'ArrowLeft') {
+      e.preventDefault();
+      goBack();
     } else if (e.key === 'Escape') {
       if (document.getElementById('menu')) closeMenu();
       else if (!$('modal').hidden) $('modal').hidden = true;
@@ -1558,6 +2018,7 @@ function bindStaticUi() {
       rowsKey = nextRows;
       if (view.kind === 'search') renderSearch();
       if (view.kind === 'collection') renderCollection();
+      if (view.kind === 'artist') renderArtist();
       if (view.kind === 'queue') renderQueue();
       if (view.kind === 'home') renderHomeShelf();
     }

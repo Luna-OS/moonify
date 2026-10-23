@@ -595,19 +595,35 @@ function moonifyEngine() {
   async function handleRequest(req, rid) {
     if (!provider) throw new Error('Unbekannte Seite');
     const type = req.type;
+    const ref = (req.ref && typeof req.ref === 'object' && req.ref) || {};
     if (provider === 'spotify') {
       if (type === 'search') return spotifyQuery('searchTracks', { searchTerm: req.query, offset: 0, limit: 30 }, `/search/${encodeURIComponent(req.query)}/tracks`, rid);
+      // Playlists, Alben und Künstler – lädt die Seite „Alle“ der Suche selbst
+      if (type === 'searchAll') return spotifyQuery('searchDesktop', { searchTerm: req.query, offset: 0, limit: 10, numberOfTopResults: 5 }, `/search/${encodeURIComponent(req.query)}`, rid);
       if (type === 'library') return spotifyQuery('libraryV3', { offset: 0, limit: 50 }, null);
-      if (type === 'collection') return spotifyCollection(String(req.ref.uri), rid);
+      if (type === 'collection') return spotifyCollection(String(ref.uri), rid);
+      if (type === 'artist') {
+        if (!/^spotify:artist:[A-Za-z0-9]+$/.test(String(ref.uri))) throw new Error('Unbekannter Künstler');
+        return spotifyQuery('queryArtistOverview', { uri: ref.uri }, spotifyPath(ref.uri), rid);
+      }
+      if (type === 'open') {
+        spaNavigate(spotifyPath(String(ref.uri)));
+        return 'ok';
+      }
       if (type === 'play') return spotifyPlay(req.track && req.track.ref.uri, req.context && req.context.ref.uri);
     }
     if (provider === 'ytmusic') {
       if (type === 'search') return innertube('search', req.params ? { query: req.query, params: String(req.params) } : { query: req.query });
       if (type === 'library') return innertube('browse', { browseId: 'FEmusic_liked_playlists' });
-      if (type === 'collection') return innertube('browse', { browseId: String(req.ref.browseId) });
+      if (type === 'collection' || type === 'artist') return innertube('browse', { browseId: String(ref.browseId) });
+      if (type === 'open') {
+        setTimeout(() => location.assign(`/browse/${encodeURIComponent(String(ref.browseId))}`), 50);
+        return 'navigating';
+      }
       if (type === 'play') {
         const videoId = req.track && req.track.ref.videoId;
         const playlistId = req.context && req.context.ref.playlistId;
+        if (!videoId && !playlistId) throw new Error('Nichts zum Abspielen gefunden');
         const url = videoId
           ? `/watch?v=${encodeURIComponent(videoId)}${playlistId ? `&list=${encodeURIComponent(playlistId)}` : ''}`
           : `/watch?list=${encodeURIComponent(playlistId)}`;
@@ -617,8 +633,16 @@ function moonifyEngine() {
     }
     if (provider === 'amazon') {
       if (type === 'search') return amazonSearch(String(req.query), rid);
+      if (type === 'open') {
+        const deeplink = String(ref.deeplink || '');
+        if (!deeplink.startsWith('/')) throw new Error('Unbekannte Seite');
+        setTimeout(() => location.assign(new URL(deeplink, location.origin).href), 50);
+        return 'navigating';
+      }
       if (type === 'play') {
-        const deeplink = req.track && req.track.ref.deeplink;
+        // Einzelner Song oder ganzes Album / ganze Playlist
+        const deeplink = (req.track && req.track.ref.deeplink) || (req.context && req.context.ref.deeplink);
+        if (!deeplink) throw new Error('Nichts zum Abspielen gefunden');
         setTimeout(() => amazonPlay(deeplink), 50);
         return 'navigating';
       }

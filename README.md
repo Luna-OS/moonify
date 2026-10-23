@@ -7,6 +7,8 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
 
 ![Moonify Startseite](docs/screenshot.png)
 
+![Suche mit Songs, Playlists, Alben und Künstlern](docs/screenshot-search.png)
+
 ## Funktionen
 
 - **Alles in Moonify:** Suche, Songs, Playlists und Lieblingssongs von Spotify, YouTube Music und
@@ -17,7 +19,13 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
   Anmelden (auch „Mit Apple/Google anmelden“). Danach schließt es sich und die Dienste laufen
   unsichtbar im Hintergrund.
 - **Eine Suche für alles:** Ein Suchfeld (`Strg/⌘ + K`) durchsucht alle verbundenen Dienste
-  gleichzeitig; Treffer werden gemischt angezeigt und lassen sich pro Dienst filtern.
+  gleichzeitig – nach **Songs, Playlists, Alben und Künstlern**. Reiter oben filtern nach Art,
+  die Chips darunter nach Dienst; der beste Treffer steht groß oben. Die letzten Suchbegriffe
+  bleiben auf der Suchseite stehen.
+- **Künstlerseiten** (Spotify, YouTube Music): beliebte Songs, Alben & Singles, Playlists und
+  ähnliche Künstler.
+- **Merken:** Playlists, Alben und Künstler der Dienste in Moonify merken – sie stehen dann in der
+  Bibliothek und in der Seitenleiste.
 - **Bibliothek:** Playlists und Lieblingssongs von Spotify und YouTube Music (Amazon folgt).
 - **Speichern in Moonify:** Lieblingssongs (❤), eigene Playlists – auch gemischt aus mehreren
   Diensten – und „Zuletzt gehört“. Funktioniert für alle Dienste gleich, auch ohne Anmeldung.
@@ -27,6 +35,8 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
 - **Songtexte:** Gibt es zum laufenden Song einen Songtext, erscheint in der Playerleiste ein Mikrofon-Knopf.
   Der Text läuft mit, die aktuelle Zeile leuchtet, und ein Klick auf eine Zeile springt dorthin
   (Songtexte von [LRCLIB](https://lrclib.net)).
+- **Zurück wie im Browser:** „Zurück“ auf Playlist- und Künstlerseiten, `Alt + ←` oder die
+  Zurück-Taste der Maus.
 - **Mond-Fortschrittsleiste:** Der Regler ist ein Mond, der mit dem Song wächst – von der schmalen
   Sichel am Anfang bis zum Vollmond am Ende. Bedienbar per Maus (klicken/ziehen) und Tastatur (← →).
 - **Nie zwei Songs gleichzeitig:** Startest du Musik bei einem Dienst, pausieren die anderen automatisch.
@@ -87,7 +97,8 @@ Moonify schickt den Google-Anmeldeseiten deshalb seine echte App-Kennung. Zeigt 
 - **Spotify:** Der Web-Player funktioniert mit Free und Premium. Hörst du mit Spotify Free, gelten die
   üblichen Einschränkungen (Werbung, Shuffle).
 - **Amazon Music:** Unter *Einstellungen* kannst du die Region einstellen (Standard:
-  Deutschland/Österreich/Schweiz, `music.amazon.de`).
+  Deutschland/Österreich/Schweiz, `music.amazon.de`). Alben, Playlists und Künstler von Amazon
+  erscheinen in der Suche und lassen sich abspielen; ihre Songlisten zeigt Moonify noch nicht an.
 - **Lautstärke:** Der Moonify-Regler steuert die Lautstärke aller Dienste.
 - **Medientasten** auf der Tastatur funktionieren ebenfalls, weil die Web-Player sie direkt unterstützen.
 - **YouTube Music** kannst du auch ohne Anmeldung durchsuchen und hören.

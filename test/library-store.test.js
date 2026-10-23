@@ -69,7 +69,50 @@ test('Nur saubere Songs werden gespeichert', () => {
 test('Kaputter Speicher bricht nichts', () => {
   const broken = { getItem: () => '{kaputt', setItem: () => { throw new Error('voll'); } };
   const store = new LibraryStore(broken);
-  assert.deepEqual(store.data, { favorites: [], playlists: [], history: [] });
+  assert.deepEqual(store.data, { favorites: [], playlists: [], history: [], saved: [], searches: [] });
   assert.doesNotThrow(() => store.toggleFavorite(song('spotify', 'a')));
   assert.ok(store.isFavorite(song('spotify', 'a')));
+});
+
+const playlistItem = (id, name = `Liste ${id}`) => ({
+  provider: 'spotify', kind: 'playlist', id, name, subtitle: 'Spotify', image: 'https://img/p.jpg', ref: { uri: `spotify:playlist:${id}` },
+});
+
+test('Gemerkt: Playlists, Alben und Künstler der Dienste an/aus, bleiben gespeichert', () => {
+  const storage = memoryStorage();
+  const store = new LibraryStore(storage);
+  assert.equal(store.toggleSaved(playlistItem('a')), true);
+  assert.equal(store.toggleSaved({ provider: 'ytmusic', kind: 'artist', id: 'UC1', name: 'Coldplay', ref: { browseId: 'UC1' } }), true);
+  assert.equal(store.toggleSaved({ provider: 'amazon', kind: 'album', id: 'B1', name: 'Album', ref: { deeplink: '/albums/B1' } }), true);
+  assert.ok(store.isSaved(playlistItem('a')));
+  assert.ok(!store.isSaved(playlistItem('b')));
+  const reloaded = new LibraryStore(storage);
+  assert.deepEqual(reloaded.data.saved.map((i) => `${i.kind}:${i.id}`), ['album:B1', 'artist:UC1', 'playlist:a']);
+  assert.equal(reloaded.toggleSaved(playlistItem('a')), false);
+  assert.ok(!reloaded.isSaved(playlistItem('a')));
+});
+
+test('Gemerkt: nur saubere Einträge', () => {
+  const store = new LibraryStore(memoryStorage());
+  assert.equal(store.toggleSaved({ provider: 'hacker', kind: 'playlist', id: 'x', name: 'x', ref: { uri: 'x' } }), false);
+  assert.equal(store.toggleSaved({ provider: 'spotify', kind: 'track', id: 'x', name: 'x', ref: { uri: 'x' } }), false);
+  assert.equal(store.toggleSaved({ provider: 'spotify', kind: 'playlist', id: 'x', name: '  ', ref: { uri: 'x' } }), false);
+  assert.equal(store.toggleSaved({ ...playlistItem('x'), image: 'javascript:alert(1)', ref: { uri: 'spotify:playlist:x', evil: 'y' } }), true);
+  assert.equal(store.data.saved[0].image, '');
+  assert.deepEqual(store.data.saved[0].ref, { uri: 'spotify:playlist:x' });
+  const data = sanitizeLibrary({ saved: [playlistItem('1'), playlistItem('1'), { provider: 'spotify' }] });
+  assert.equal(data.saved.length, 1);
+});
+
+test('Letzte Suchbegriffe: neueste zuerst, ohne Doppelte, höchstens 8', () => {
+  const store = new LibraryStore(memoryStorage());
+  for (const q of ['eins', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun']) store.addSearch(q);
+  store.addSearch('  ZWEI ');
+  store.addSearch('');
+  assert.deepEqual(store.data.searches, ['ZWEI', 'neun', 'acht', 'sieben', 'sechs', 'fünf', 'vier', 'drei']);
+  store.removeSearch('neun');
+  assert.equal(store.data.searches.length, 7);
+  store.clearSearches();
+  assert.deepEqual(store.data.searches, []);
+  assert.deepEqual(sanitizeLibrary({ searches: ['a', 'A', 5, ' b '] }).searches, ['a', 'b']);
 });

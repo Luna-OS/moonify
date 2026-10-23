@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0 – 2026-10-23
+
+Suchen & Entdecken 🔭
+
+### Neu
+
+- **Playlists, Alben und Künstler in der Suche:** Die Suche zeigt neben Songs jetzt auch Playlists, Alben und Künstler von Spotify, YouTube Music und Amazon Music. Oben gibt es Reiter (*Alles · Songs · Playlists · Alben · Künstler*) und darunter die Auswahl der Dienste.
+- **Top-Treffer:** Passt ein Künstler, eine Playlist oder ein Album genau zur Suche, steht er groß oben neben den Songs.
+- **Abspielen direkt von der Kachel:** Fahr mit der Maus über eine Playlist oder ein Album und drück ▶ – Moonify startet sie beim jeweiligen Dienst.
+- **Künstlerseiten** (Spotify & YouTube Music): beliebte Songs, Alben & Singles, Playlists und ähnliche Künstler. *Abspielen* und *Zufällig* inklusive.
+- **Merken:** Playlists, Alben und Künstler der Dienste mit „Merken“ in Moonify ablegen – sie erscheinen in der Bibliothek, in der Seitenleiste und auf der Startseite.
+- **Zurück:** Ein „Zurück“-Knopf auf Playlist- und Künstlerseiten führt dorthin, wo du herkamst (z. B. zurück zu den Suchergebnissen). Geht auch mit **Alt + ←** oder der Zurück-Taste der Maus.
+- **Zuletzt gesucht:** Die letzten Suchbegriffe stehen auf der Suchseite – ein Klick sucht erneut.
+- **In langen Listen suchen:** Playlists und Alben mit vielen Songs haben ein eigenes Suchfeld.
+
+### Hinweise
+
+- Bei Amazon Music kann Moonify die Songliste von Alben/Playlists und Künstlerseiten noch nicht anzeigen. „Abspielen“ startet das Album bzw. die Playlist trotzdem direkt bei Amazon, „Im Fenster öffnen“ zeigt die Seite im Amazon-Fenster.
+
 ## 0.4.0 – 2026-10-16
 
 Songtexte zum Mitsingen 🎤
