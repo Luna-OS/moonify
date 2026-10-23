@@ -34,5 +34,7 @@ export const icons = {
   edit: wrap('<path d="M5 19h3.5L19 8.5 15.5 5 5 15.5z"/><path d="m13.5 7 3.5 3.5"/>'),
   trash: wrap('<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12M10.5 11v5M13.5 11v5"/>'),
   lyrics: wrap('<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/>'),
+  bookmark: wrap('<path d="M7 4.5h10v15l-5-3.6-5 3.6z"/>'),
+  bookmarkFilled: wrap('<path class="fill" d="M7 4.5h10v15l-5-3.6-5 3.6z"/>'),
   note: wrap('<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>'),
 };

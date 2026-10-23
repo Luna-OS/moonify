@@ -1,14 +1,36 @@
 import { PROVIDER_IDS } from '../../shared/providers.js';
 
-// Moonifys eigene Sammlung: Lieblingssongs, Playlists und Verlauf.
+// Moonifys eigene Sammlung: Lieblingssongs, Playlists, Verlauf, gemerkte Playlists/Alben/
+// Künstler der Dienste und die letzten Suchbegriffe.
 // Funktioniert für alle Dienste gleich (auch gemischt) und ohne Anmeldung.
 
 const KEY = 'moonify.library.v1';
 const HISTORY_MAX = 50;
+const SAVED_MAX = 200;
+const SEARCHES_MAX = 8;
 const TEXT_MAX = 300;
+const REF_FIELDS = ['uri', 'videoId', 'playlistId', 'browseId', 'deeplink'];
+const SAVED_KINDS = ['playlist', 'album', 'artist'];
 
 export function trackKey(track) {
   return `${track.provider}:${track.id}`;
+}
+
+/** Schlüssel für gemerkte Playlists, Alben und Künstler. */
+export function itemKey(item) {
+  return `${item.provider}:${item.kind}:${item.id}`;
+}
+
+function cleanRef(raw) {
+  const ref = {};
+  for (const name of REF_FIELDS) {
+    if (typeof raw?.[name] === 'string' && raw[name]) ref[name] = raw[name].slice(0, 500);
+  }
+  return ref;
+}
+
+function cleanImage(value) {
+  return typeof value === 'string' && value.startsWith('https://') ? value.slice(0, 1000) : '';
 }
 
 function text(value) {
@@ -20,12 +42,10 @@ export function cleanTrack(track) {
   if (!track || typeof track !== 'object' || !PROVIDER_IDS.includes(track.provider)) return null;
   const id = text(track.id);
   if (!id) return null;
-  const ref = {};
-  for (const name of ['uri', 'videoId', 'playlistId', 'deeplink']) {
-    if (typeof track.ref?.[name] === 'string') ref[name] = track.ref[name].slice(0, 500);
-  }
+  const ref = cleanRef(track.ref);
+  delete ref.browseId;
   if (!Object.keys(ref).length) return null;
-  const image = typeof track.image === 'string' && track.image.startsWith('https://') ? track.image.slice(0, 1000) : '';
+  const image = cleanImage(track.image);
   const duration = Number(track.duration);
   return {
     provider: track.provider,
@@ -52,8 +72,22 @@ function cleanList(list) {
   return result;
 }
 
+/** Playlist, Album oder Künstler eines Dienstes zum Merken. */
+export function cleanItem(item) {
+  if (!item || typeof item !== 'object' || !PROVIDER_IDS.includes(item.provider) || !SAVED_KINDS.includes(item.kind)) return null;
+  const id = text(item.id);
+  const name = text(item.name).trim();
+  const ref = cleanRef(item.ref);
+  if (!id || !name || !Object.keys(ref).length) return null;
+  return { provider: item.provider, kind: item.kind, id, name, subtitle: text(item.subtitle), image: cleanImage(item.image), ref };
+}
+
+function cleanSearch(value) {
+  return typeof value === 'string' ? value.trim().slice(0, 120) : '';
+}
+
 export function emptyLibrary() {
-  return { favorites: [], playlists: [], history: [] };
+  return { favorites: [], playlists: [], history: [], saved: [], searches: [] };
 }
 
 export function sanitizeLibrary(raw) {
@@ -73,6 +107,16 @@ export function sanitizeLibrary(raw) {
       tracks: cleanList(p.tracks),
     });
   }
+  const savedKeys = new Set();
+  for (const entry of Array.isArray(raw.saved) ? raw.saved : []) {
+    const item = cleanItem(entry);
+    if (!item || savedKeys.has(itemKey(item))) continue;
+    savedKeys.add(itemKey(item));
+    base.saved.push(item);
+  }
+  base.saved = base.saved.slice(0, SAVED_MAX);
+  const searches = (Array.isArray(raw.searches) ? raw.searches : []).map(cleanSearch).filter(Boolean);
+  base.searches = searches.filter((q, i) => searches.findIndex((x) => x.toLowerCase() === q.toLowerCase()) === i).slice(0, SEARCHES_MAX);
   return base;
 }
 
@@ -205,6 +249,50 @@ export class LibraryStore extends EventTarget {
 
   clearHistory() {
     this.data.history = [];
+    this.save();
+  }
+
+  /* Gemerkte Playlists, Alben und Künstler der Dienste */
+
+  isSaved(item) {
+    if (!item) return false;
+    const key = itemKey(item);
+    return this.data.saved.some((i) => itemKey(i) === key);
+  }
+
+  /** Merkt sich ein Element bzw. vergisst es wieder; gibt den neuen Zustand zurück. */
+  toggleSaved(item) {
+    const clean = cleanItem(item);
+    if (!clean) return false;
+    const key = itemKey(clean);
+    if (this.isSaved(clean)) {
+      this.data.saved = this.data.saved.filter((i) => itemKey(i) !== key);
+      this.save();
+      return false;
+    }
+    this.data.saved = [clean, ...this.data.saved].slice(0, SAVED_MAX);
+    this.save();
+    return true;
+  }
+
+  /* Letzte Suchbegriffe */
+
+  addSearch(query) {
+    const clean = cleanSearch(query);
+    if (!clean) return;
+    const lower = clean.toLowerCase();
+    this.data.searches = [clean, ...this.data.searches.filter((q) => q.toLowerCase() !== lower)].slice(0, SEARCHES_MAX);
+    this.save();
+  }
+
+  removeSearch(query) {
+    const before = this.data.searches.length;
+    this.data.searches = this.data.searches.filter((q) => q !== query);
+    if (this.data.searches.length !== before) this.save();
+  }
+
+  clearSearches() {
+    this.data.searches = [];
     this.save();
   }
 }
