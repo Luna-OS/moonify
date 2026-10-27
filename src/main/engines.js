@@ -199,6 +199,11 @@ export class EngineManager {
 
   /** Google zeigt „Anmeldung nicht möglich“ → andere Methode probieren. */
   checkGoogleBlock(id, url) {
+    // „Bist du ein Roboter?“ – das unsichtbare Fenster kommt nicht weiter, bis man bestätigt
+    if (/^https:\/\/(www\.)?google\.[a-z.]+\/sorry\//.test(String(url))) {
+      this.send('engine:notice', id, 'captcha');
+      return;
+    }
     if (!GOOGLE_BLOCKED.test(String(url))) return;
     const engine = this.engines.get(id);
     if (!engine || engine.window.isDestroyed()) return;

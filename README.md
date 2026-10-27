@@ -9,6 +9,8 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
 
 ![Suche mit Songs, Playlists, Alben und Künstlern](docs/screenshot-search.png)
 
+![Jetzt läuft mit Als Nächstes, Songtext und Ähnlich](docs/screenshot-nowplaying.png)
+
 ## Funktionen
 
 - **Alles in Moonify:** Suche, Songs, Playlists und Lieblingssongs von Spotify, YouTube Music und
@@ -22,6 +24,13 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
   gleichzeitig – nach **Songs, Playlists, Alben und Künstlern**. Reiter oben filtern nach Art,
   die Chips darunter nach Dienst; der beste Treffer steht groß oben. Die letzten Suchbegriffe
   bleiben auf der Suchseite stehen.
+- **Erkunden:** Neuerscheinungen, Charts, Stimmungen & Genres und „Angesagt“ von YouTube Music.
+- **Jetzt läuft:** Große Player-Seite mit **Als Nächstes**, **Songtext** und **Ähnlich** – wie bei
+  YouTube Music, mit Radio, Video, Daumen hoch/runter (angemeldet) und Herz.
+- **Radio starten** zu jedem Song (über YouTube Music – auch für Spotify- und Amazon-Songs), **Mix**
+  auf Künstlerseiten, **Zufall & Wiederholen** in der Playerleiste.
+- **Suchvorschläge** beim Tippen, **Zum Künstler / Zum Album / Link kopieren** im ⋯-Menü und
+  Tastenkürzel wie bei YouTube Music (`?` zeigt alle).
 - **Künstlerseiten** (Spotify, YouTube Music): beliebte Songs, Alben & Singles, Playlists und
   ähnliche Künstler.
 - **Merken:** Playlists, Alben und Künstler der Dienste in Moonify merken – sie stehen dann in der
@@ -34,7 +43,7 @@ ohne zwischen mehreren Apps oder Browser-Tabs zu wechseln.
 - **Eine Playerleiste für alle Dienste:** Titel, Künstler, Cover, Play/Pause, Vor/Zurück, Lautstärke.
 - **Songtexte:** Gibt es zum laufenden Song einen Songtext, erscheint in der Playerleiste ein Mikrofon-Knopf.
   Der Text läuft mit, die aktuelle Zeile leuchtet, und ein Klick auf eine Zeile springt dorthin
-  (Songtexte von [LRCLIB](https://lrclib.net)).
+  (Songtexte von [LRCLIB](https://lrclib.net), sonst von YouTube Music).
 - **Zurück wie im Browser:** „Zurück“ auf Playlist- und Künstlerseiten, `Alt + ←` oder die
   Zurück-Taste der Maus.
 - **Mond-Fortschrittsleiste:** Der Regler ist ein Mond, der mit dem Song wächst – von der schmalen

@@ -28,6 +28,21 @@ test('Cover nur über https, Texte werden begrenzt', () => {
   assert.equal(s.artwork, '');
 });
 
+test('Wiederholen, Zufall und YouTube-Song-ID werden geprüft übernommen', () => {
+  const ok = normalizeState({ repeat: 'one', canShuffle: true, shuffle: false, videoId: 'VlSEIa1zubs', playlistId: 'RDAMVMVlSEIa1zubs' });
+  assert.equal(ok.repeat, 'one');
+  assert.equal(ok.canShuffle, true);
+  assert.equal(ok.shuffle, false);
+  assert.equal(ok.videoId, 'VlSEIa1zubs');
+  assert.equal(ok.playlistId, 'RDAMVMVlSEIa1zubs');
+  const bad = normalizeState({ repeat: 'immer', canShuffle: 'ja', shuffle: 'true', videoId: '../etc/passwd', playlistId: 'a b' });
+  assert.equal(bad.repeat, '');
+  assert.equal(bad.canShuffle, false);
+  assert.equal(bad.shuffle, null);
+  assert.equal(bad.videoId, '');
+  assert.equal(bad.playlistId, '');
+});
+
 test('der Anbieter, der zuletzt startet, wird angezeigt – die anderen werden pausiert', () => {
   const hub = new PlayerHub(clock());
   const paused = [];

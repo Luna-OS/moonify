@@ -47,7 +47,7 @@ export function cleanTrack(track) {
   if (!Object.keys(ref).length) return null;
   const image = cleanImage(track.image);
   const duration = Number(track.duration);
-  return {
+  const clean = {
     provider: track.provider,
     kind: 'track',
     id,
@@ -58,6 +58,12 @@ export function cleanTrack(track) {
     image,
     ref,
   };
+  // „Zum Künstler“ / „Zum Album“ – nur gültige Verweise desselben Dienstes
+  for (const [name, kind] of [['artistLink', 'artist'], ['albumLink', 'album']]) {
+    const link = cleanItem(track[name]);
+    if (link && link.kind === kind && link.provider === track.provider) clean[name] = link;
+  }
+  return clean;
 }
 
 function cleanList(list) {
