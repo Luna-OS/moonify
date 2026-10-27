@@ -66,3 +66,13 @@ test('Song-Ende: abweichender Titel beim Start wird nach 20 s akzeptiert, nicht 
   assert.equal(d.observe('amazon', { title: 'Suite bergamasque: III', playing: true, position: 60, duration: 300 }, 60000), false);
   assert.equal(d.observe('amazon', { title: 'Suite bergamasque: III', playing: false, position: 299, duration: 300 }, 300000), true);
 });
+
+test('Warteschlange mischen: laufender Song bleibt, die kommenden werden neu geordnet', () => {
+  const q = new Queue();
+  q.set(['a', 'b', 'c', 'd', 'e'].map((id) => ({ id, title: id })), 1);
+  const values = [0.1, 0.9, 0.5];
+  q.shuffleUpcoming(() => values.shift() ?? 0);
+  assert.deepEqual(q.items.slice(0, 2).map((t) => t.id), ['a', 'b']);
+  assert.deepEqual([...q.items.slice(2).map((t) => t.id)].sort(), ['c', 'd', 'e']);
+  assert.equal(q.current().id, 'b');
+});

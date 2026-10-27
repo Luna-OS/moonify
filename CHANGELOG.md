@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.0 – 2026-10-27
+
+YouTube Music in Moonify 🎧
+
+### Neu
+
+- **Erkunden** (neuer Punkt in der Seitenleiste): Neuerscheinungen, Charts, Stimmungen & Genres und „Angesagt“ von YouTube Music – mit Charts-Plätzen, Musikvideos, Top-Künstlern und „Alle anzeigen“.
+- **Jetzt läuft:** Klick auf Cover oder Titel in der Playerleiste öffnet die große Player-Seite mit den Reitern **Als Nächstes**, **Songtext** und **Ähnlich** – wie bei YouTube Music.
+  - *Als Nächstes* zeigt bei YouTube Music die Warteschlange bzw. das Radio des Dienstes (Klick springt zum Song), sonst Moonifys eigene Warteschlange (jetzt auch mischbar).
+  - *Songtext*: Gibt es bei LRCLIB keinen, holt Moonify ihn von YouTube Music.
+  - *Ähnlich*: ähnliche Titel, Playlists und Künstler von YouTube Music.
+  - Knöpfe für *Radio starten*, *Video ansehen*, das Herz und – angemeldet – **Daumen hoch/runter** (landet bei YouTube Music in „Mag ich“).
+- **Radio starten** im ⋯-Menü jedes Songs – auch für Songs von Spotify und Amazon (das Radio kommt dann von YouTube Music).
+- **Mix** auf YouTube-Music-Künstlerseiten.
+- **Zufall & Wiederholen** in der Playerleiste (aus → alle → einen Song) für YouTube Music und Spotify; mit Moonifys Warteschlange mischt Zufall die kommenden Songs.
+- **Suchvorschläge** beim Tippen (von YouTube Music) und deine letzten Suchen – mit Pfeiltasten auswählbar.
+- **Zum Künstler / Zum Album / Link kopieren** im ⋯-Menü.
+- **Startseite:** Regale „Von YouTube Music“ (persönlich, wenn du angemeldet bist).
+- **Bibliothek:** Bei angemeldetem YouTube Music Abkürzungen zu Songs mit „Mag ich“, Alben, Künstlern, Abos und Verlauf.
+- **Tastenkürzel wie bei YouTube Music:** Leertaste/K, J/L (±10 s), Umschalt+N/P, +/−, M, S, R, / – und **?** zeigt alle.
+- **„Bist du ein Roboter?“:** Fragt Google das im unsichtbaren Player-Fenster nach, sagt Moonify Bescheid und öffnet auf Wunsch das Fenster.
+
+### Hinweise
+
+- Texte von YouTube Music (Regal-Namen usw.) kommen jetzt auf Deutsch.
+- Nicht übernommen: Podcasts, Hochladen eigener Musik und Downloads – das gibt es bei YouTube Music, in Moonify aber (noch) nicht.
+
 ## 0.5.0 – 2026-10-23
 
 Suchen & Entdecken 🔭

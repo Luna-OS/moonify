@@ -68,6 +68,17 @@ export class Queue extends EventTarget {
     return null;
   }
 
+  /** Die kommenden Songs zufällig neu ordnen (der laufende bleibt). */
+  shuffleUpcoming(random = Math.random) {
+    const rest = this.upcoming();
+    for (let i = rest.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      [rest[i], rest[j]] = [rest[j], rest[i]];
+    }
+    this.items = [...this.items.slice(0, this.index + 1), ...rest];
+    this.changed();
+  }
+
   next() {
     if (this.index + 1 >= this.items.length) {
       this.index = this.items.length;

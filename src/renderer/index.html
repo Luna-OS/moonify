@@ -31,6 +31,7 @@
     <nav class="sidebar" aria-label="Navigation">
       <button class="nav-item" data-view="home" id="nav-home"></button>
       <button class="nav-item" data-view="search" id="nav-search"></button>
+      <button class="nav-item" data-view="explore" id="nav-explore"></button>
       <button class="nav-item" data-view="library" id="nav-library"></button>
       <div class="nav-section">Deine Playlists</div>
       <div class="nav-playlists" id="nav-playlists"></div>
@@ -47,8 +48,9 @@
       <section class="view" id="view-library" aria-label="Bibliothek"></section>
       <section class="view" id="view-collection" aria-label="Playlist"></section>
       <section class="view" id="view-artist" aria-label="Künstler"></section>
-      <section class="view" id="view-queue" aria-label="Warteschlange"></section>
-      <section class="view" id="view-lyrics" aria-label="Songtext"></section>
+      <section class="view" id="view-explore" aria-label="Erkunden"></section>
+      <section class="view" id="view-browse" aria-label="YouTube Music"></section>
+      <section class="view" id="view-nowplaying" aria-label="Jetzt läuft"></section>
       <section class="view" id="view-settings" aria-label="Einstellungen"></section>
     </main>
 
@@ -66,9 +68,11 @@
       </div>
       <div class="transport">
         <div class="controls">
+          <button class="icon-btn ctrl mode" id="btn-shuffle" aria-label="Zufallswiedergabe" title="Zufallswiedergabe" disabled></button>
           <button class="icon-btn ctrl" id="btn-prev" aria-label="Vorheriger Titel" title="Vorheriger Titel" disabled></button>
           <button class="play-btn" id="btn-play" aria-label="Abspielen" title="Abspielen" disabled></button>
           <button class="icon-btn ctrl" id="btn-next" aria-label="Nächster Titel" title="Nächster Titel" disabled></button>
+          <button class="icon-btn ctrl mode" id="btn-repeat" aria-label="Wiederholen" title="Wiederholen" disabled></button>
         </div>
         <div class="timeline">
           <span class="time" id="time-current">0:00</span>
@@ -78,7 +82,7 @@
       </div>
       <div class="volume">
         <button class="icon-btn" id="btn-lyrics" aria-label="Songtext" title="Songtext" hidden></button>
-        <button class="icon-btn" id="btn-queue" aria-label="Warteschlange" title="Warteschlange"></button>
+        <button class="icon-btn" id="btn-queue" aria-label="Als Nächstes" title="Als Nächstes"></button>
         <button class="icon-btn" id="btn-mute" aria-label="Stumm schalten" title="Stumm schalten"></button>
         <input id="volume" class="star-range" type="range" min="0" max="100" step="1" aria-label="Lautstärke" />
       </div>

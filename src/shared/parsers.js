@@ -94,10 +94,23 @@ function spotifyArtistNames(o) {
   return (o?.artists?.items || []).map((a) => a?.profile?.name).filter(Boolean).join(', ');
 }
 
+/** Verweise „Zum Künstler“ / „Zum Album“ eines Spotify-Songs. */
+function spotifyLinks(o) {
+  const links = {};
+  const artist = (o.artists?.items || []).find((a) => typeof a?.uri === 'string' && a.uri.startsWith('spotify:artist:') && a.profile?.name);
+  if (artist) links.artistLink = { provider: 'spotify', kind: 'artist', id: spotifyId(artist.uri), name: text(artist.profile.name), subtitle: 'Künstler', image: '', ref: { uri: artist.uri } };
+  const album = o.albumOfTrack;
+  if (typeof album?.uri === 'string' && album.uri.startsWith('spotify:album:') && album.name) {
+    links.albumLink = { provider: 'spotify', kind: 'album', id: spotifyId(album.uri), name: text(album.name), subtitle: spotifyArtistNames(o), image: pickImage(album.coverArt?.sources), ref: { uri: album.uri } };
+  }
+  return links;
+}
+
 function spotifyTrack(o) {
   if (!o || typeof o.uri !== 'string' || !o.uri.startsWith('spotify:track:')) return null;
   const ms = o.duration?.totalMilliseconds ?? o.trackDuration?.totalMilliseconds ?? 0;
   return {
+    ...spotifyLinks(o),
     provider: 'spotify',
     kind: 'track',
     id: spotifyId(o.uri),
@@ -281,6 +294,57 @@ function ytVideoId(renderer) {
   return id;
 }
 
+/** Verweise „Zum Künstler“ / „Zum Album“ aus den Textteilen einer Zeile. */
+function ytLinks(runs, image = '') {
+  const links = {};
+  const artist = runs.find((x) => /ARTIST/.test(ytPageType(x)) && x.navigationEndpoint.browseEndpoint.browseId);
+  if (artist) {
+    const id = artist.navigationEndpoint.browseEndpoint.browseId;
+    links.artistLink = { provider: 'ytmusic', kind: 'artist', id, name: String(artist.text).trim(), subtitle: 'Künstler', image: '', ref: { browseId: id } };
+  }
+  const album = runs.find((x) => /ALBUM/.test(ytPageType(x)) && x.navigationEndpoint.browseEndpoint.browseId);
+  if (album) {
+    const id = album.navigationEndpoint.browseEndpoint.browseId;
+    links.albumLink = { provider: 'ytmusic', kind: 'album', id, name: String(album.text).trim(), subtitle: artist ? String(artist.text).trim() : '', image, ref: { browseId: id, playlistId: '' } };
+  }
+  return links;
+}
+
+/** Song aus einer Listenzeile (Suche, Playlists, Charts …) – oder null. */
+function ytTrackFromRow(r) {
+  const videoId = ytVideoId(r);
+  if (!videoId || /PODCAST/.test(JSON.stringify(r.overlay || ''))) return null;
+  const { flex, fixed } = ytColumnRuns(r);
+  const title = (flex[0] || []).map((x) => x.text).join('').trim();
+  const details = flex.slice(1).flat();
+  const artists = details.filter((x) => /ARTIST|USER_CHANNEL/.test(ytPageType(x))).map((x) => String(x.text).trim());
+  const album = (details.find((x) => /ALBUM/.test(ytPageType(x)))?.text || '').trim();
+  const plain = details
+    .map((x) => x.text)
+    .join('')
+    .split('•')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const duration = [...details, ...fixed.flat()].map((x) => x.text?.trim()).find((t) => DURATION.test(t || '')) || '';
+  const fallbackArtist = plain.filter((s) => !YT_TYPE_LABELS.has(s) && !DURATION.test(s) && s !== album)[0] || '';
+  const image = ytThumbnail(r);
+  const rank = text(r.customIndexColumn?.musicCustomIndexColumnRenderer?.text).trim();
+  return {
+    ...ytLinks(details, image),
+    provider: 'ytmusic',
+    kind: 'track',
+    id: videoId,
+    title,
+    artist: artists.length ? artists.join(', ') : fallbackArtist,
+    album,
+    duration: parseDuration(duration),
+    image,
+    playable: true,
+    ...(rank ? { rank } : {}),
+    ref: { videoId },
+  };
+}
+
 export function parseYtmTracks(json) {
   const data = parse(json);
   const tracks = [];
@@ -297,6 +361,7 @@ export function parseYtmTracks(json) {
         const runs = card.subtitle?.runs || [];
         const artists = runs.filter((x) => /ARTIST|USER_CHANNEL/.test(ytPageType(x))).map((x) => String(x.text).trim());
         tracks.push({
+          ...ytLinks(runs, ytThumbnail(card)),
           provider: 'ytmusic',
           kind: 'track',
           id: videoId,
@@ -313,34 +378,11 @@ export function parseYtmTracks(json) {
     }
     const r = o.musicResponsiveListItemRenderer;
     if (!r) return true;
-    const videoId = ytVideoId(r);
-    if (!videoId || seen.has(videoId) || /PODCAST/.test(JSON.stringify(r.overlay || ''))) return false;
-    seen.add(videoId);
-    const { flex, fixed } = ytColumnRuns(r);
-    const title = (flex[0] || []).map((x) => x.text).join('').trim();
-    const details = flex.slice(1).flat();
-    const artists = details.filter((x) => /ARTIST|USER_CHANNEL/.test(ytPageType(x))).map((x) => String(x.text).trim());
-    const album = (details.find((x) => /ALBUM/.test(ytPageType(x)))?.text || '').trim();
-    const plain = details
-      .map((x) => x.text)
-      .join('')
-      .split('•')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const duration = [...details, ...fixed.flat()].map((x) => x.text?.trim()).find((t) => DURATION.test(t || '')) || '';
-    const fallbackArtist = plain.filter((s) => !YT_TYPE_LABELS.has(s) && !DURATION.test(s) && s !== album)[0] || '';
-    tracks.push({
-      provider: 'ytmusic',
-      kind: 'track',
-      id: videoId,
-      title,
-      artist: artists.length ? artists.join(', ') : fallbackArtist,
-      album,
-      duration: parseDuration(duration),
-      image: ytThumbnail(r),
-      playable: true,
-      ref: { videoId },
-    });
+    const track = ytTrackFromRow(r);
+    if (track && !seen.has(track.id)) {
+      seen.add(track.id);
+      tracks.push(track);
+    }
     return false;
   });
   return tracks;
@@ -486,6 +528,7 @@ function ytTrackFromTwoRow(r) {
   const artists = runs.filter((x) => /ARTIST|USER_CHANNEL/.test(ytPageType(x))).map((x) => String(x.text).trim());
   const plain = text(r.subtitle).split('•').map((p) => p.trim()).filter(Boolean);
   return {
+    ...ytLinks(runs, ytThumbnail(r)),
     provider: 'ytmusic',
     kind: 'track',
     id: watch.videoId,
@@ -521,6 +564,7 @@ export function parseYtmArtist(json) {
   });
   const items = ytBrowseItems(data.contents);
   const listeners = (text(header.monthlyListenerCount) || text(header.subscriptionButton?.subscribeButtonRenderer?.subscriberCountText)).replace(/\s/g, ' ');
+  const mixId = (button) => button?.buttonRenderer?.navigationEndpoint?.watchPlaylistEndpoint?.playlistId || '';
   return {
     artist: {
       provider: 'ytmusic',
@@ -531,6 +575,9 @@ export function parseYtmArtist(json) {
       image: pickImage(header.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || header.foregroundThumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails, 540),
       ref: {},
     },
+    // „Mix“ (Radio) und „Zufallsmix“ des Künstlers
+    radio: mixId(header.startRadioButton),
+    shuffle: mixId(header.playButton),
     // Ohne Songliste (z. B. in manchen Regionen) die Videos nehmen
     tracks: uniqueBy(songs.length ? songs : videos),
     albums: items.filter((i) => i.kind === 'album'),
@@ -555,6 +602,173 @@ export function ytmPlaylistId(json) {
     return false;
   });
   return id;
+}
+
+/* ---- Seiten wie „Erkunden“, Charts, Startseite, „Ähnliche Titel“ ---- */
+
+const YT_SHELVES = ['musicCarouselShelfRenderer', 'musicShelfRenderer', 'gridRenderer', 'musicImmersiveCarouselShelfRenderer', 'musicPlaylistShelfRenderer'];
+
+function ytBrowseLink(endpoint) {
+  const be = endpoint?.browseEndpoint;
+  return be?.browseId ? { browseId: be.browseId, params: be.params || '' } : null;
+}
+
+function ytShelfTitle(shelf) {
+  const header = Object.values(shelf.header || {})[0] || {};
+  return text(shelf.title).trim() || text(header.title).trim();
+}
+
+function ytShelfMore(shelf) {
+  const header = Object.values(shelf.header || {})[0] || {};
+  return ytBrowseLink(header.moreContentButton?.buttonRenderer?.navigationEndpoint) || ytBrowseLink(shelf.bottomEndpoint) || null;
+}
+
+/** Kachel-Knopf wie „Neuerscheinungen“, „Charts“ oder ein Genre. */
+function ytNavButton(b) {
+  const link = ytBrowseLink(b.clickCommand);
+  const label = text(b.buttonText).trim();
+  // Podcasts lässt Moonify aus
+  if (!link || !label || /non_music_audio|podcast/i.test(link.browseId)) return null;
+  const color = Number(b.solid?.leftStripeColor);
+  return { label, ...link, color: Number.isFinite(color) && color ? `#${(color & 0xffffff).toString(16).padStart(6, '0')}` : '' };
+}
+
+/**
+ * Eine YT-Music-Seite in Abschnitte zerlegen: Songs, Kacheln (Playlists, Alben, Künstler,
+ * Videos) und Navigations-Knöpfe. Podcasts und Folgen werden ausgelassen.
+ */
+export function parseYtmBrowse(json) {
+  const data = parse(json);
+  if (!data) return { title: '', sections: [] };
+  const header = Object.values(data.header || {})[0] || {};
+  const sections = [];
+  walk(data.contents || data.continuationContents || data, (o) => {
+    const type = YT_SHELVES.find((k) => o[k]);
+    if (!type) return true;
+    const shelf = o[type];
+    const entries = shelf.contents || shelf.items || [];
+    // Kacheln (Videos, Alben …) oder Liste (Songs) – wie bei YouTube Music
+    const layout = entries[0]?.musicTwoRowItemRenderer ? 'cards' : 'list';
+    const section = { title: ytShelfTitle(shelf), more: ytShelfMore(shelf), layout, tracks: [], items: [], nav: [] };
+    for (const entry of entries) {
+      if (entry.musicResponsiveListItemRenderer) {
+        const r = entry.musicResponsiveListItemRenderer;
+        const track = ytTrackFromRow(r);
+        if (track) section.tracks.push(track);
+        else {
+          const item = ytItemFromRow(r);
+          if (item) section.items.push(item);
+        }
+      } else if (entry.musicTwoRowItemRenderer) {
+        const r = entry.musicTwoRowItemRenderer;
+        const item = ytItemFromTwoRow(r) || ytTrackFromTwoRow(r);
+        if (item?.kind === 'track') section.tracks.push(item);
+        else if (item) section.items.push(item);
+      } else if (entry.musicNavigationButtonRenderer) {
+        const nav = ytNavButton(entry.musicNavigationButtonRenderer);
+        if (nav) section.nav.push(nav);
+      }
+    }
+    section.tracks = uniqueBy(section.tracks);
+    section.items = uniqueBy(section.items);
+    if (section.tracks.length || section.items.length || section.nav.length) sections.push(section);
+    return false;
+  });
+  return { title: text(header.title).trim(), sections };
+}
+
+/* ---- „Als Nächstes“, Songtext, Gefällt mir ---- */
+
+function ytQueueItem(r) {
+  const watch = r.navigationEndpoint?.watchEndpoint || {};
+  const videoId = r.videoId || watch.videoId;
+  if (!videoId) return null;
+  const runs = r.longBylineText?.runs || [];
+  const artist = text(r.shortBylineText).trim() || runs.filter((x) => /ARTIST|USER_CHANNEL/.test(ytPageType(x))).map((x) => String(x.text).trim()).join(', ');
+  const image = pickImage(r.thumbnail?.thumbnails, 226);
+  return {
+    ...ytLinks(runs, image),
+    provider: 'ytmusic',
+    kind: 'track',
+    id: videoId,
+    title: text(r.title).trim(),
+    artist,
+    album: (runs.find((x) => /ALBUM/.test(ytPageType(x)))?.text || '').trim(),
+    duration: parseDuration(text(r.lengthText)),
+    image,
+    playable: true,
+    selected: r.selected === true,
+    ref: { videoId },
+  };
+}
+
+/** Antwort von „next“: Warteschlange des Dienstes, Songtext-/Ähnlich-Seiten, Gefällt-mir-Status. */
+export function parseYtmNext(json) {
+  const data = parse(json);
+  const result = { tracks: [], playlistId: '', lyricsId: '', relatedId: '', likeStatus: '' };
+  if (!data) return result;
+  walk(data.contents, (o) => {
+    if (o.playlistPanelRenderer) {
+      result.playlistId = o.playlistPanelRenderer.playlistId || '';
+      for (const entry of o.playlistPanelRenderer.contents || []) {
+        const r = entry.playlistPanelVideoRenderer || entry.playlistPanelVideoWrapperRenderer?.primaryRenderer?.playlistPanelVideoRenderer;
+        const item = r && ytQueueItem(r);
+        if (item) result.tracks.push(item);
+      }
+      return false;
+    }
+    if (o.tabRenderer) {
+      const id = o.tabRenderer.endpoint?.browseEndpoint?.browseId || '';
+      if (id.startsWith('MPLY')) result.lyricsId = id;
+      if (id.startsWith('MPTR')) result.relatedId = id;
+    }
+    return true;
+  });
+  walk(data.playerOverlays, (o) => {
+    if (!result.likeStatus && typeof o.likeStatus === 'string') result.likeStatus = o.likeStatus;
+    return !result.likeStatus;
+  });
+  if (!result.playlistId) {
+    const first = result.tracks.length ? data.currentVideoEndpoint?.watchEndpoint?.playlistId : '';
+    result.playlistId = first || '';
+  }
+  return result;
+}
+
+/** Songtext von YouTube Music (ohne Zeitangaben). */
+export function parseYtmLyrics(json) {
+  const data = parse(json);
+  let lyrics = null;
+  walk(data, (o) => {
+    if (lyrics) return false;
+    const shelf = o.musicDescriptionShelfRenderer;
+    if (!shelf) return true;
+    const body = text(shelf.description).trim();
+    if (body) lyrics = { text: body, source: text(shelf.footer).replace(/^Quelle:\s*/i, '').trim() };
+    return false;
+  });
+  return lyrics;
+}
+
+/** Suchvorschläge: Begriffe und direkte Treffer. */
+export function parseYtmSuggestions(json) {
+  const data = parse(json);
+  const queries = [];
+  const items = [];
+  walk(data, (o) => {
+    if (o.searchSuggestionRenderer) {
+      const q = o.searchSuggestionRenderer.navigationEndpoint?.searchEndpoint?.query || text(o.searchSuggestionRenderer.suggestion);
+      if (q && !queries.includes(q)) queries.push(q);
+      return false;
+    }
+    if (o.musicResponsiveListItemRenderer) {
+      const r = o.musicResponsiveListItemRenderer;
+      items.push(ytTrackFromRow(r) || ytItemFromRow(r));
+      return false;
+    }
+    return true;
+  });
+  return { queries, items: uniqueBy(items) };
 }
 
 /** Filter-Chips einer YT-Music-Suche, z. B. „Titel“ → params. */
@@ -592,7 +806,13 @@ export function parseAmazonTracks(json) {
     const asin = amazonTrackAsin(deeplink);
     if (asin && !seen.has(asin)) {
       seen.add(asin);
+      const links = {};
+      const artistLink = /^\/artists\/([A-Za-z0-9]+)/.exec(o.secondaryLink?.deeplink || '');
+      if (artistLink && text(o.secondaryText)) {
+        links.artistLink = { provider: 'amazon', kind: 'artist', id: artistLink[1], name: text(o.secondaryText), subtitle: 'Künstler', image: '', ref: { deeplink: o.secondaryLink.deeplink } };
+      }
       tracks.push({
+        ...links,
         provider: 'amazon',
         kind: 'track',
         id: asin,

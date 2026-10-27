@@ -116,3 +116,14 @@ test('Letzte Suchbegriffe: neueste zuerst, ohne Doppelte, höchstens 8', () => {
   assert.deepEqual(store.data.searches, []);
   assert.deepEqual(sanitizeLibrary({ searches: ['a', 'A', 5, ' b '] }).searches, ['a', 'b']);
 });
+
+test('Songs behalten gültige Verweise auf Künstler und Album', () => {
+  const t = cleanTrack({
+    ...song('spotify', 'x'),
+    artistLink: { provider: 'spotify', kind: 'artist', id: 'a1', name: 'Luna', ref: { uri: 'spotify:artist:a1' } },
+    albumLink: { provider: 'ytmusic', kind: 'album', id: 'b1', name: 'Fremd', ref: { browseId: 'MPRE1' } },
+  });
+  assert.equal(t.artistLink.ref.uri, 'spotify:artist:a1');
+  assert.equal(t.albumLink, undefined); // anderer Dienst → verworfen
+  assert.equal(cleanTrack({ ...song('spotify', 'y'), artistLink: { provider: 'spotify', kind: 'playlist', id: 'p', name: 'x', ref: { uri: 'u' } } }).artistLink, undefined);
+});

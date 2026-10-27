@@ -8,9 +8,13 @@ import {
   parseSpotifySearch,
   parseSpotifyTracks,
   parseYtmArtist,
+  parseYtmBrowse,
   parseYtmChips,
   parseYtmCollections,
+  parseYtmLyrics,
+  parseYtmNext,
   parseYtmSearch,
+  parseYtmSuggestions,
   parseYtmTracks,
   pickRelevant,
   ytmPlaylistId,
@@ -135,7 +139,7 @@ function toast(message, kind = 'info') {
   setTimeout(() => node.remove(), 3700);
 }
 
-function openModal({ title, text, actions, input = null }) {
+function openModal({ title, text, actions, input = null, body = null }) {
   const modal = $('modal');
   $('modal-title').textContent = title;
   $('modal-text').textContent = text;
@@ -143,7 +147,7 @@ function openModal({ title, text, actions, input = null }) {
     ? h('input', { class: 'modal-input', type: 'text', maxlength: '120', placeholder: input.placeholder || '', 'aria-label': input.placeholder || title })
     : null;
   if (field) field.value = input.value || '';
-  $('modal-input-slot').replaceChildren(...(field ? [field] : []));
+  $('modal-input-slot').replaceChildren(...(field ? [field] : body ? [body] : []));
   const close = () => {
     modal.hidden = true;
   };
@@ -296,14 +300,14 @@ function playNextInQueue() {
   while (next && !canPlay(next)) next = queue.next();
   endDetector.reset(next);
   if (next) startTrack(next);
-  renderQueueIfVisible();
+  renderNowPlayingIfVisible('queue');
 }
 
 function playPreviousInQueue() {
   const previous = queue.previous();
   endDetector.reset(previous);
   if (previous) startTrack(previous);
-  renderQueueIfVisible();
+  renderNowPlayingIfVisible('queue');
 }
 
 function addToQueue(track, next = false) {
@@ -318,7 +322,7 @@ function addToQueue(track, next = false) {
   } else {
     toast(next ? `„${track.title}“ kommt als Nächstes.` : `„${track.title}“ ist in der Warteschlange.`, 'ok');
   }
-  renderQueueIfVisible();
+  renderNowPlayingIfVisible('queue');
 }
 
 async function playCollection(item, tracks) {
@@ -489,12 +493,15 @@ function playlistEntries(tracks) {
 function trackMenu(anchor, track, context) {
   const inMoonifyPlaylist = context?.provider === 'moonify' && context.kind === 'playlist';
   const entries = [
+    { text: 'Radio starten', icon: icons.radio, run: () => startRadio(track) },
     { text: 'Als Nächstes spielen', icon: icons.next, run: () => addToQueue(track, true) },
     { text: 'Zur Warteschlange hinzufügen', icon: icons.queue, run: () => addToQueue(track) },
     { text: store.isFavorite(track) ? 'Aus Lieblingssongs entfernen' : 'Zu Lieblingssongs hinzufügen', icon: icons.heart, run: () => toggleFavorite(track) },
-    '-',
-    ...playlistEntries(track),
   ];
+  if (track.artistLink) entries.push({ text: 'Zum Künstler', icon: icons.mic, run: () => openArtist(track.artistLink) });
+  if (track.albumLink) entries.push({ text: 'Zum Album', icon: icons.library, run: () => openCollection(track.albumLink) });
+  if (shareUrl(track)) entries.push({ text: 'Link kopieren', icon: icons.link, run: () => copyLink(track) });
+  entries.push('-', ...playlistEntries(track));
   if (inMoonifyPlaylist) {
     entries.push('-',
       { text: 'Nach oben', icon: icons.up, run: () => store.moveInPlaylist(context.id, trackKey(track), -1) },
@@ -936,6 +943,15 @@ function collectionCard(item) {
   h('div', { class: 'cc-sub' }, providerTag(provider), sub ? ` ${sub}` : ''));
 }
 
+// Bereiche der YouTube-Music-Bibliothek (angemeldet)
+const YTM_LIBRARY = [
+  ['Songs mit „Mag ich“', 'FEmusic_liked_videos'],
+  ['Alben', 'FEmusic_liked_albums'],
+  ['Künstler', 'FEmusic_library_corpus_track_artists'],
+  ['Abos', 'FEmusic_library_corpus_artists'],
+  ['Verlauf', 'FEmusic_history'],
+];
+
 function renderLibrary() {
   const root = $('view-library');
   const list = connected();
@@ -970,7 +986,10 @@ function renderLibrary() {
       return h('section', { class: 'lib-section' }, head,
         h('div', { class: 'notice warn small' }, `${lib.error} `, h('button', { class: 'link-btn', onclick: () => loadLibrary(provider.id, true) }, 'Erneut versuchen')));
     }
-    return h('section', { class: 'lib-section' }, head, h('div', { class: 'collection-grid' }, lib.items.map(collectionCard)));
+    const shortcuts = provider.id === 'ytmusic'
+      ? h('div', { class: 'chips' }, YTM_LIBRARY.map(([label, browseId]) => h('button', { class: 'chip', onclick: () => openBrowseLink({ browseId }, label) }, label)))
+      : null;
+    return h('section', { class: 'lib-section' }, head, shortcuts, h('div', { class: 'collection-grid' }, lib.items.map(collectionCard)));
   });
   root.replaceChildren(page(h('h1', { class: 'page-title' }, 'Bibliothek'), own, saved, sections));
   for (const provider of list) if (provider.library && loginStatus[provider.id] && !library[provider.id]) loadLibrary(provider.id);
@@ -1005,6 +1024,8 @@ async function loadCollection(state) {
   state.status = 'loading';
   try {
     state.tracks = await loadCollectionTracks(state.item);
+    // Seiten wie „Angesagt“ kommen ohne eigenes Cover
+    if (!state.item.image && state.tracks[0]?.image) state.item.image = state.tracks[0].image;
     state.status = 'done';
   } catch (err) {
     state.status = 'error';
@@ -1220,6 +1241,14 @@ function renderArtist() {
       }),
       h('button', { class: 'btn ghost', disabled: tracks.length < 2, html: `${icons.shuffle}<span>Zufällig</span>`, onclick: () => playList(tracks, 0, { shuffle: true }) }),
     ];
+  // YouTube Music: „Mix“ (Radio des Künstlers) – startet mit dem beliebtesten Song
+  if (data?.radio && tracks.length) {
+    actions.push(h('button', {
+      class: 'btn ghost',
+      html: `${icons.radio}<span>Mix</span>`,
+      onclick: () => playTrack(tracks[0], { provider: 'ytmusic', kind: 'playlist', id: data.radio, name: 'Mix', ref: { playlistId: data.radio } }),
+    }));
+  }
   actions.push(saveButton(item));
   const header = h('div', { class: 'collection-header artist-header', style: `--brand:${provider.color}` },
     h('div', { class: 'ch-art round' }, art(item.image || info.image)),
@@ -1250,49 +1279,485 @@ function renderArtist() {
   $('view-artist').replaceChildren(page(backButton(), header, body));
 }
 
-/* ---------- Warteschlange ---------- */
+/* ---------- Erkunden & Seiten von YouTube Music ---------- */
 
-function renderQueueIfVisible() {
-  if (view.kind === 'queue') renderQueue();
+let exploreState = null; // „Erkunden“ (FEmusic_explore)
+let browseState = null; // geöffnete Seite wie Charts, Neuerscheinungen, Genre …
+let homeFeed = null; // Startseite von YouTube Music
+
+/** Link auf eine YT-Music-Seite öffnen – Playlists, Alben und Künstler in Moonifys eigenen Ansichten. */
+function openBrowseLink(link, title = '') {
+  const id = String(link.browseId || '');
+  if (id.startsWith('VL')) {
+    openCollection({ provider: 'ytmusic', kind: 'playlist', id, name: title || 'Playlist', subtitle: 'YouTube Music', image: '', ref: { browseId: id, playlistId: id.slice(2) } });
+  } else if (id.startsWith('MPRE')) {
+    openCollection({ provider: 'ytmusic', kind: 'album', id, name: title || 'Album', subtitle: '', image: '', ref: { browseId: id, playlistId: '' } });
+  } else if (id.startsWith('UC')) {
+    openArtist({ provider: 'ytmusic', kind: 'artist', id, name: title, subtitle: 'Künstler', image: '', ref: { browseId: id } });
+  } else {
+    const state = { browseId: id, params: link.params || '', title, status: 'loading', data: null, error: '' };
+    showView({ kind: 'browse', state });
+    loadBrowse(state);
+  }
 }
 
-function renderQueue() {
-  const root = $('view-queue');
+async function loadBrowse(state) {
+  state.status = 'loading';
+  try {
+    state.data = parseYtmBrowse(await request('ytmusic', { type: 'browse', browseId: state.browseId, params: state.params }));
+    state.status = 'done';
+    state.loadedAt = Date.now();
+  } catch (err) {
+    state.status = 'error';
+    state.error = err.message;
+  }
+  if (view.kind === 'browse' && browseState === state) renderBrowse();
+  if (view.kind === 'explore' && exploreState === state) renderExplore();
+}
+
+function openExplore() {
+  const stale = exploreState && exploreState.status !== 'loading' && Date.now() - (exploreState.loadedAt || 0) > 10 * 60 * 1000;
+  if (!exploreState || stale || exploreState.status === 'error') {
+    exploreState = { browseId: 'FEmusic_explore', params: '', title: 'Erkunden', status: 'idle', data: null, error: '' };
+  }
+  showView({ kind: 'explore', state: exploreState });
+  if (exploreState.status === 'idle' && settings.enabled.ytmusic) loadBrowse(exploreState);
+}
+
+function browseBody(state) {
+  if (!state || state.status === 'loading' || state.status === 'idle') return spinner('Wird geladen …');
+  if (state.status === 'error') {
+    return h('div', { class: 'notice warn' }, `YouTube Music: ${state.error} `,
+      h('button', { class: 'link-btn', onclick: () => loadBrowse(state) }, 'Erneut versuchen'));
+  }
+  if (!state.data.sections.length) return emptyState('Nichts gefunden', 'YouTube Music hat hier gerade nichts geliefert.');
+  return browseSections(state.data.sections);
+}
+
+function renderExplore() {
+  const root = $('view-explore');
+  const head = [h('h1', { class: 'page-title' }, 'Erkunden'), h('p', { class: 'section-sub' }, 'Neuerscheinungen, Charts, Stimmungen & Genres und was gerade angesagt ist – von YouTube Music.')];
+  if (!settings.enabled.ytmusic) {
+    root.replaceChildren(page(head, emptyState('YouTube Music verbinden', '„Erkunden“ kommt von YouTube Music. Verbinde YouTube Music in den Einstellungen – eine Anmeldung ist dafür nicht nötig.', true)));
+    return;
+  }
+  root.replaceChildren(page(head, browseBody(exploreState)));
+}
+
+function renderBrowse() {
+  const state = browseState;
+  if (!state) return;
+  $('view-browse').replaceChildren(page(backButton(), h('h1', { class: 'page-title' }, state.data?.title || state.title || 'YouTube Music'), browseBody(state)));
+}
+
+/** Song-Kachel (z. B. Musikvideos) mit Abspiel-Knopf. */
+function trackCard(track) {
+  const provider = getProvider(track.provider);
+  const wide = /ytimg\.com\/vi\//.test(track.image);
+  const play = () => {
+    if (!canPlay(track)) {
+      toast(`${provider.name} ist nicht verbunden – in den Einstellungen verbinden.`, 'error');
+      return;
+    }
+    playTrack(track);
+  };
+  return h('div', {
+    class: `collection-card track-card${wide ? ' wide' : ''}`,
+    style: `--brand:${provider.color}`,
+    role: 'button',
+    tabindex: '0',
+    title: track.title,
+    onclick: play,
+    onkeydown: (e) => {
+      if (e.key === 'Enter' && e.target === e.currentTarget) play();
+    },
+    oncontextmenu: (e) => {
+      e.preventDefault();
+      trackMenu(e.currentTarget, track, null);
+    },
+  },
+  h('div', { class: 'cc-art' }, art(track.image), h('button', {
+    class: 'cc-play',
+    title: 'Abspielen',
+    'aria-label': `${track.title} abspielen`,
+    html: icons.play,
+    onclick: (e) => {
+      e.stopPropagation();
+      play();
+    },
+  })),
+  h('div', { class: 'cc-name' }, track.title),
+  h('div', { class: 'cc-sub' }, track.artist || provider.name));
+}
+
+/** Lange Songlisten erst gekürzt zeigen – „Alle anzeigen“ klappt sie auf. */
+function expandableTracks(section) {
+  const limit = 8;
+  const wrap = h('div', { class: 'expandable' });
+  const fill = (all) => {
+    const shown = all ? section.tracks : section.tracks.slice(0, limit);
+    wrap.replaceChildren(
+      trackList(shown, null, { numbered: section.tracks.some((t) => t.rank) }),
+      section.tracks.length > limit && !section.more
+        ? h('button', { class: 'link-btn more-btn', onclick: () => fill(!all) }, all ? 'Weniger anzeigen' : `Alle ${section.tracks.length} anzeigen`)
+        : null,
+    );
+  };
+  fill(false);
+  return wrap;
+}
+
+/** Abschnitte einer YT-Music-Seite: Kacheln, Songlisten, Navigation (Genres, Charts …). */
+function browseSections(sections) {
+  return sections.map((section) => {
+    const parts = [];
+    if (section.title) {
+      parts.push(h('div', { class: 'section-head spaced' },
+        h('h2', {}, section.title),
+        section.more ? h('button', { class: 'link-btn', onclick: () => openBrowseLink(section.more, section.title) }, 'Alle anzeigen') : null));
+    }
+    if (section.nav.length) {
+      parts.push(h('div', { class: 'nav-tiles' }, section.nav.map((n) => h('button', {
+        class: 'nav-tile',
+        style: n.color ? `--tile:${n.color}` : '',
+        onclick: () => openBrowseLink(n, n.label),
+      }, n.label))));
+    }
+    if (section.tracks.length) parts.push(section.layout === 'cards' ? h('div', { class: 'card-row' }, section.tracks.map(trackCard)) : expandableTracks(section));
+    if (section.items.length) parts.push(cardRow(section.items));
+    return h('section', { class: 'browse-section' }, parts);
+  });
+}
+
+/** Startseite von YouTube Music (persönlich, wenn angemeldet) – höchstens alle 30 Minuten neu. */
+function loadHomeFeed() {
+  if (!settings.enabled.ytmusic) return;
+  if (homeFeed && (homeFeed.status === 'loading' || Date.now() - homeFeed.at < (homeFeed.status === 'error' ? 60 * 1000 : 30 * 60 * 1000))) return;
+  homeFeed = { status: 'loading', data: null, at: Date.now() };
+  const entry = homeFeed;
+  request('ytmusic', { type: 'browse', browseId: 'FEmusic_home' })
+    .then((json) => {
+      entry.data = parseYtmBrowse(json);
+      entry.status = 'done';
+    })
+    .catch(() => {
+      entry.status = 'error';
+    })
+    .finally(() => {
+      if (view.kind === 'home') renderHomeShelf();
+    });
+}
+
+/* ---------- Jetzt läuft: Als Nächstes, Songtext, Ähnliche Titel ---------- */
+
+const NOW_TABS = [
+  { id: 'queue', label: 'Als Nächstes' },
+  { id: 'lyrics', label: 'Songtext' },
+  { id: 'related', label: 'Ähnlich' },
+];
+let nowTab = 'queue';
+const ytNext = new Map(); // „next“-Antworten von YouTube Music je Song
+const ytRelated = new Map(); // „Ähnliche Titel“ je Seite
+const likeOverrides = new Map(); // eigene Bewertungen (Daumen), bis YouTube sie bestätigt
+
+function openNowPlaying(tab = nowTab) {
+  nowTab = tab;
+  if (view.kind === 'nowplaying') renderNowPlaying();
+  else showView({ kind: 'nowplaying' });
+}
+
+/** Knöpfe der Playerleiste: gleicher Reiter schon offen → zurück, sonst dorthin. */
+function toggleNowPlaying(tab) {
+  if (view.kind === 'nowplaying' && nowTab === tab) goBack();
+  else openNowPlaying(tab);
+}
+
+function renderNowPlayingIfVisible(tab = null) {
+  if (view.kind === 'nowplaying' && (!tab || nowTab === tab)) renderNowPlaying();
+}
+
+/** Läuft gerade etwas über YouTube Music (mit bekannter Video-ID)? */
+function currentYtSong() {
+  const c = hub.current();
+  return c?.id === 'ytmusic' && c.videoId ? c : null;
+}
+
+/** „next“ für einen YouTube-Music-Song laden – einmal je Song. */
+function ensureYtNext(c = currentYtSong()) {
+  if (!c) return null;
+  // Läuft ein einzelner Song, spielt YouTube Music danach sein Radio zu diesem Song
+  const playlistId = c.playlistId || `RDAMVM${c.videoId}`;
+  const key = `${c.videoId}|${playlistId}`;
+  let entry = ytNext.get(key);
+  // Nach einem Fehler erst nach 30 Sekunden neu fragen (sonst fragt jedes Neuzeichnen erneut)
+  if (entry?.status === 'error' && Date.now() - entry.at > 30 * 1000) entry = null;
+  if (!entry) {
+    entry = { status: 'loading', data: null, error: '', at: Date.now() };
+    ytNext.set(key, entry);
+    if (ytNext.size > 30) ytNext.delete(ytNext.keys().next().value);
+    entry.promise = request('ytmusic', { type: 'next', videoId: c.videoId, playlistId })
+      .then((json) => {
+        entry.data = parseYtmNext(json);
+        entry.status = 'done';
+      })
+      .catch((err) => {
+        entry.status = 'error';
+        entry.error = err.message;
+        entry.at = Date.now();
+      })
+      .finally(() => renderNowPlayingIfVisible());
+  }
+  return entry;
+}
+
+/** Der laufende Song als Moonify-Song (für Herz, Menü, Radio, Link). */
+function currentAsTrack() {
+  const known = currentKnownTrack();
+  if (known) return known;
+  const yt = currentYtSong();
+  if (!yt) return null;
+  return { provider: 'ytmusic', kind: 'track', id: yt.videoId, title: yt.title, artist: yt.artist, album: yt.album, duration: yt.duration, image: yt.artwork, ref: { videoId: yt.videoId } };
+}
+
+function renderNowPlaying() {
+  const root = $('view-nowplaying');
+  const panelScroll = root.querySelector('.np-panel')?.scrollTop || 0;
+  const sameTab = root.dataset.tab === nowTab;
+  root.dataset.tab = nowTab;
+  const current = hub.current();
+  const provider = current ? getProvider(current.id) : null;
+  const track = currentAsTrack();
+  const left = current
+    ? h('div', { class: 'np-left' },
+      h('div', { class: 'np-art' }, art(current.artwork)),
+      h('div', { class: 'np-title' }, current.title || 'Unbekannter Titel'),
+      h('div', { class: 'np-artist' },
+        track?.artistLink
+          ? h('button', { class: 'link-btn', onclick: () => openArtist(track.artistLink) }, current.artist || track.artistLink.name)
+          : current.artist || current.album || ''),
+      h('div', { class: 'np-meta' }, providerTag(provider), current.album && current.album !== current.artist ? h('span', {}, current.album) : null),
+      h('div', { class: 'np-actions' }, nowActions(current, track)))
+    : h('div', { class: 'np-left' }, emptyState('Nichts läuft gerade', 'Such dir einen Song aus oder stöbere unter „Erkunden“.'));
+  const tabs = h('div', { class: 'type-tabs np-tabs', role: 'tablist' }, NOW_TABS.map((t) => h('button', {
+    class: `type-tab${nowTab === t.id ? ' active' : ''}`,
+    role: 'tab',
+    'aria-selected': String(nowTab === t.id),
+    onclick: () => openNowPlaying(t.id),
+  }, t.label)));
+  const body = nowTab === 'lyrics' ? lyricsContent() : nowTab === 'related' ? relatedContent() : queueContent();
+  const panel = h('div', { class: 'np-panel' }, body);
+  root.replaceChildren(h('div', { class: 'np-layout' }, left, h('div', { class: 'np-right' }, tabs, panel)));
+  if (nowTab === 'lyrics') {
+    lyrics.lineIndex = -1;
+    updateLyricsLine(true);
+  } else if (sameTab) {
+    panel.scrollTop = panelScroll;
+  }
+}
+
+function nowActions(current, track) {
+  const actions = [];
+  if (track) actions.push(heartButton(track, 'np-heart'));
+  if (current.id === 'ytmusic' && current.videoId && loginStatus.ytmusic) actions.push(...likeButtons(current));
+  if (track) {
+    actions.push(h('button', { class: 'btn ghost small', html: `${icons.radio}<span>Radio starten</span>`, onclick: () => startRadio(track) }));
+  }
+  if (current.id === 'ytmusic') {
+    actions.push(h('button', { class: 'btn ghost small', html: `${icons.video}<span>Video ansehen</span>`, onclick: () => api.engines.show('ytmusic') }));
+  }
+  if (track) {
+    actions.push(h('button', {
+      class: 'icon-btn',
+      title: 'Mehr',
+      'aria-label': 'Mehr Optionen',
+      html: icons.more,
+      onclick: (e) => trackMenu(e.currentTarget, track, null),
+    }));
+  }
+  return actions;
+}
+
+function likeButtons(c) {
+  const entry = ensureYtNext(c);
+  const status = likeOverrides.get(c.videoId) || entry?.data?.likeStatus || 'INDIFFERENT';
+  const make = (value, icon, label) => h('button', {
+    class: `icon-btn np-like${status === value ? ' active' : ''}`,
+    title: label,
+    'aria-label': label,
+    'aria-pressed': String(status === value),
+    html: icon,
+    onclick: () => rate(c.videoId, status === value ? 'INDIFFERENT' : value),
+  });
+  return [make('LIKE', icons.thumbUp, 'Mag ich'), make('DISLIKE', icons.thumbDown, 'Mag ich nicht')];
+}
+
+/** Daumen hoch/runter bei YouTube Music (landet dort in „Mag ich“). */
+async function rate(videoId, status) {
+  const action = { LIKE: 'like', DISLIKE: 'dislike', INDIFFERENT: 'none' }[status];
+  const before = likeOverrides.get(videoId);
+  likeOverrides.set(videoId, status);
+  renderNowPlayingIfVisible();
+  try {
+    await request('ytmusic', { type: 'like', action, videoId });
+    if (status === 'LIKE') toast('Bei YouTube Music zu „Mag ich“ hinzugefügt 👍', 'ok');
+  } catch (err) {
+    if (before) likeOverrides.set(videoId, before);
+    else likeOverrides.delete(videoId);
+    renderNowPlayingIfVisible();
+    toast(`YouTube Music: ${err.message}`, 'error');
+  }
+}
+
+/* Als Nächstes */
+
+function moonifyQueueContent() {
   const current = queue.current();
   const upcoming = queue.upcoming();
-  const sections = [h('h1', { class: 'page-title' }, 'Warteschlange')];
-  if (!current) {
-    sections.push(emptyState('Die Warteschlange ist leer', 'Spiele eine Moonify-Playlist ab oder wähle bei einem Song „Zur Warteschlange hinzufügen“.'));
+  const sections = [h('h2', { class: 'section-title first' }, 'Läuft gerade'), trackList([current])];
+  sections.push(h('div', { class: 'section-head spaced' },
+    h('h2', {}, `Als Nächstes (${upcoming.length})`),
+    upcoming.length > 1 ? h('button', { class: 'link-btn', onclick: () => {
+      queue.shuffleUpcoming();
+      toast('Warteschlange gemischt 🔀', 'ok');
+    } }, 'Mischen') : null,
+    upcoming.length ? h('button', { class: 'link-btn', onclick: () => {
+      queue.items = [current];
+      queue.index = 0;
+      queue.changed();
+    } }, 'Leeren') : null));
+  if (upcoming.length) {
+    const list = trackList(upcoming, { provider: 'moonify', kind: 'queue', id: 'queue' });
+    // Entfernen-Knopf je Zeile
+    [...list.children].forEach((row, i) => {
+      row.append(h('button', {
+        class: 'icon-btn tr-remove',
+        title: 'Aus der Warteschlange entfernen',
+        'aria-label': 'Aus der Warteschlange entfernen',
+        html: icons.close,
+        onclick: (e) => {
+          e.stopPropagation();
+          queue.remove(i);
+        },
+      }));
+    });
+    sections.push(list);
   } else {
-    sections.push(h('h2', { class: 'section-title first' }, 'Läuft gerade'), trackList([current]));
-    sections.push(h('div', { class: 'section-head spaced' },
-      h('h2', {}, `Als Nächstes (${upcoming.length})`),
-      upcoming.length ? h('button', { class: 'link-btn', onclick: () => {
-        queue.items = [current];
-        queue.index = 0;
-        queue.changed();
-      } }, 'Leeren') : null));
-    if (upcoming.length) {
-      const list = trackList(upcoming, { provider: 'moonify', kind: 'queue', id: 'queue' });
-      // Entfernen-Knopf je Zeile
-      [...list.children].forEach((row, i) => {
-        row.append(h('button', {
-          class: 'icon-btn tr-remove',
-          title: 'Aus der Warteschlange entfernen',
-          'aria-label': 'Aus der Warteschlange entfernen',
-          html: icons.close,
-          onclick: (e) => {
-            e.stopPropagation();
-            queue.remove(i);
-          },
-        }));
-      });
-      sections.push(list);
-    } else {
-      sections.push(h('p', { class: 'section-sub' }, 'Danach ist Schluss – oder der Dienst spielt von selbst weiter.'));
+    sections.push(h('p', { class: 'section-sub' }, 'Danach ist Schluss – oder der Dienst spielt von selbst weiter.'));
+  }
+  return sections;
+}
+
+function queueContent() {
+  // Eigene Warteschlange zeigen, sobald darin etwas ansteht – sonst die des Dienstes
+  if (queue.current() && queue.upcoming().length) return moonifyQueueContent();
+  const yt = currentYtSong();
+  if (yt) {
+    const entry = ensureYtNext(yt);
+    if (entry.status === 'loading') return spinner('Als Nächstes wird geladen …');
+    if (entry.status === 'error') {
+      return h('div', { class: 'notice warn' }, `YouTube Music: ${entry.error} `,
+        h('button', { class: 'link-btn', onclick: () => {
+          entry.at = 0; // sofort neu laden
+          renderNowPlaying();
+        } }, 'Erneut versuchen'));
+    }
+    const { tracks, playlistId } = entry.data;
+    if (!tracks.length) return emptyState('Nichts in Sicht', 'YouTube Music hat gerade keine nächsten Songs geliefert.');
+    const listId = playlistId || yt.playlistId;
+    const context = listId ? { provider: 'ytmusic', kind: 'playlist', id: listId, ref: { playlistId: listId } } : null;
+    return [h('p', { class: 'np-hint' }, 'Von YouTube Music – läuft von selbst weiter. Ein Klick springt zu einem Song.'), trackList(tracks, context)];
+  }
+  const playing = hub.current();
+  if (playing) {
+    return emptyState('Der Dienst entscheidet', `${getProvider(playing.id).name} spielt von selbst weiter. Über „⋯“ bei einem Song („Als Nächstes spielen“) stellst du dir hier eine eigene Reihenfolge zusammen.`);
+  }
+  return emptyState('Die Warteschlange ist leer', 'Spiele eine Playlist ab oder wähle bei einem Song „Zur Warteschlange hinzufügen“.');
+}
+
+/* Ähnliche Titel */
+
+function relatedContent() {
+  const yt = currentYtSong();
+  if (!yt) {
+    return emptyState('Ähnliche Titel', hub.current()
+      ? 'Ähnliche Titel liefert YouTube Music – starte über „⋯ → Radio starten“ ein Radio zu diesem Song, dann erscheinen sie hier.'
+      : 'Starte einen Song, dann erscheinen hier ähnliche Titel.');
+  }
+  const entry = ensureYtNext(yt);
+  if (entry.status === 'loading') return spinner('Ähnliche Titel werden geladen …');
+  const id = entry.data?.relatedId;
+  const none = () => emptyState('Keine ähnlichen Titel', 'YouTube Music hat zu diesem Song nichts Ähnliches geliefert. Unter „Als Nächstes“ findest du das Radio zum Song.');
+  if (!id) return none();
+  let related = ytRelated.get(id);
+  if (related?.status === 'error' && Date.now() - related.at > 30 * 1000) related = null;
+  if (!related) {
+    related = { status: 'loading', data: null, at: Date.now() };
+    ytRelated.set(id, related);
+    if (ytRelated.size > 20) ytRelated.delete(ytRelated.keys().next().value);
+    request('ytmusic', { type: 'browse', browseId: id })
+      .then((json) => {
+        related.data = parseYtmBrowse(json);
+        related.status = 'done';
+      })
+      .catch(() => {
+        related.status = 'error';
+        related.at = Date.now();
+      })
+      .finally(() => renderNowPlayingIfVisible('related'));
+  }
+  if (related.status === 'loading') return spinner('Ähnliche Titel werden geladen …');
+  if (related.status === 'error' || !related.data.sections.length) return none();
+  return browseSections(related.data.sections);
+}
+
+/* Radio & Teilen */
+
+const radioContext = (videoId) => ({ provider: 'ytmusic', kind: 'playlist', id: `RDAMVM${videoId}`, name: 'Radio', ref: { playlistId: `RDAMVM${videoId}` } });
+
+/** Radio zu einem Song – über YouTube Music, auch für Songs anderer Dienste. */
+async function startRadio(track) {
+  if (!settings.enabled.ytmusic) {
+    toast('Das Radio kommt von YouTube Music – verbinde YouTube Music in den Einstellungen (ohne Anmeldung möglich).', 'error');
+    return;
+  }
+  let seed = track.provider === 'ytmusic' ? track : null;
+  if (!seed) {
+    toast(`Radio zu „${track.title}“ wird bei YouTube Music gesucht …`);
+    try {
+      const found = parseYtmTracks(await request('ytmusic', { type: 'search', query: `${track.title} ${track.artist}`.trim() }));
+      seed = found.find((t) => titlesMatch(track.title, t.title)) || found[0] || null;
+    } catch {
+      seed = null;
+    }
+    if (!seed) {
+      toast('Dazu hat YouTube Music kein Radio gefunden.', 'error');
+      return;
     }
   }
-  root.replaceChildren(page(sections));
+  playTrack(seed, radioContext(seed.ref?.videoId || seed.id));
+}
+
+function shareUrl(track) {
+  if (track.provider === 'ytmusic') return `https://music.youtube.com/watch?v=${encodeURIComponent(track.ref?.videoId || track.id)}`;
+  if (track.provider === 'spotify') return `https://open.spotify.com/track/${encodeURIComponent(track.id)}`;
+  if (track.provider === 'amazon' && track.ref?.deeplink) return `https://${AMAZON_REGIONS[settings.amazonRegion]?.host || 'music.amazon.de'}${track.ref.deeplink}`;
+  return '';
+}
+
+async function copyLink(track) {
+  const url = shareUrl(track);
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch {
+    const area = h('textarea', { style: 'position:fixed;opacity:0' });
+    area.value = url;
+    document.body.append(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+  toast('Link kopiert – du kannst ihn jetzt teilen.', 'ok');
 }
 
 /* ---------- Songtexte ---------- */
@@ -1303,15 +1768,7 @@ const lyricsKey = (current) => (current?.title ? `${current.title}\n${current.ar
 function watchLyrics() {
   const current = hub.current();
   const key = lyricsKey(current);
-  if (key === lyrics.key) {
-    // Das Cover kommt oft erst nach dem Titel
-    if (key && current.artwork && lyrics.song && lyrics.song.artwork !== current.artwork) {
-      lyrics.song.artwork = current.artwork;
-      const slot = view.kind === 'lyrics' && $('view-lyrics').querySelector('.lh-art');
-      if (slot) slot.replaceChildren(art(current.artwork));
-    }
-    return;
-  }
+  if (key === lyrics.key) return;
   clearTimeout(lyrics.timer);
   Object.assign(lyrics, {
     key,
@@ -1323,7 +1780,20 @@ function watchLyrics() {
   // Kurz warten: beim Songwechsel kommen Titel, Künstler und Länge oft nacheinander an
   if (key) lyrics.timer = setTimeout(() => loadLyrics(key), 800);
   renderLyricsButton();
-  if (view.kind === 'lyrics') renderLyrics();
+  renderNowPlayingIfVisible('lyrics');
+}
+
+/** Songtext direkt von YouTube Music (ohne Zeitangaben) – wenn LRCLIB nichts hat. */
+async function ytLyrics(c) {
+  if (c?.id !== 'ytmusic' || !c.videoId) return null;
+  const entry = ensureYtNext(c);
+  await entry.promise;
+  if (!entry.data?.lyricsId) return null;
+  try {
+    return parseYtmLyrics(await request('ytmusic', { type: 'browse', browseId: entry.data.lyricsId }));
+  } catch {
+    return null;
+  }
 }
 
 async function loadLyrics(key, attempt = 0) {
@@ -1336,90 +1806,78 @@ async function loadLyrics(key, attempt = 0) {
     response = { ok: false };
   }
   if (lyrics.key !== key) return; // inzwischen läuft ein anderer Song
-  if (response?.ok) {
+  if (response?.ok && response.lyrics) {
     const data = response.lyrics;
     lyrics.data = data;
-    lyrics.status = !data ? 'none' : data.instrumental && !data.plain ? 'instrumental' : 'found';
+    lyrics.status = data.instrumental && !data.plain ? 'instrumental' : 'found';
   } else {
-    lyrics.status = 'error';
-    // Kein Netz oder LRCLIB überlastet: später noch einmal versuchen
-    if (attempt < 2) lyrics.timer = setTimeout(() => loadLyrics(key, attempt + 1), 15000 * (attempt + 1));
+    // LRCLIB hat nichts (oder ist nicht erreichbar) – bei YouTube Music dort nachsehen
+    const yt = await ytLyrics(hub.current());
+    if (lyrics.key !== key) return;
+    if (yt) {
+      lyrics.data = { synced: null, plain: yt.text, source: 'YouTube Music', credit: yt.source };
+      lyrics.status = 'found';
+    } else if (response?.ok) {
+      lyrics.status = 'none';
+    } else {
+      lyrics.status = 'error';
+      // Kein Netz oder LRCLIB überlastet: später noch einmal versuchen
+      if (attempt < 2) lyrics.timer = setTimeout(() => loadLyrics(key, attempt + 1), 15000 * (attempt + 1));
+    }
   }
   renderLyricsButton();
-  if (view.kind === 'lyrics') renderLyrics();
+  renderNowPlayingIfVisible('lyrics');
 }
 
-/** Der Knopf erscheint nur, wenn es zum Song einen Songtext gibt. */
+/** Der Mikrofon-Knopf erscheint nur, wenn es zum Song einen Songtext gibt. */
 function renderLyricsButton() {
   const button = $('btn-lyrics');
-  const open = view.kind === 'lyrics';
+  const open = view.kind === 'nowplaying' && nowTab === 'lyrics';
   button.hidden = !(open || lyrics.status === 'found');
   button.classList.toggle('active', open);
   button.title = open ? 'Songtext schließen' : 'Songtext';
   button.setAttribute('aria-label', button.title);
   button.setAttribute('aria-pressed', String(open));
+  const queueOpen = view.kind === 'nowplaying' && nowTab === 'queue';
+  $('btn-queue').classList.toggle('active', queueOpen);
+  $('btn-queue').setAttribute('aria-pressed', String(queueOpen));
 }
 
-function toggleLyrics() {
-  if (view.kind === 'lyrics') goBack();
-  else showView({ kind: 'lyrics' });
-}
-
-function renderLyrics() {
-  const root = $('view-lyrics');
+function lyricsContent() {
   const { song, status, data } = lyrics;
-  const provider = song ? getProvider(song.id) : null;
-  const header = song
-    ? h('div', { class: 'lyrics-header' },
-      h('div', { class: 'lh-art' }, art(song.artwork)),
-      h('div', { class: 'lh-text' },
-        h('small', {}, 'Songtext'),
-        h('h1', {}, song.title),
-        h('div', { class: 'lh-meta' }, song.artist ? h('span', {}, song.artist) : null, provider ? providerTag(provider) : null)))
-    : null;
-  let body;
-  if (!song) {
-    body = emptyState('Nichts läuft gerade', 'Starte einen Song – gibt es einen Songtext dazu, erscheint er hier.');
-  } else if (status === 'loading' || status === 'idle') {
-    body = spinner('Songtext wird gesucht …');
-  } else if (status === 'error') {
-    body = h('div', { class: 'notice warn' }, 'Songtexte sind gerade nicht erreichbar. ',
+  if (!song) return emptyState('Nichts läuft gerade', 'Starte einen Song – gibt es einen Songtext dazu, erscheint er hier.');
+  if (status === 'loading' || status === 'idle') return spinner('Songtext wird gesucht …');
+  if (status === 'error') {
+    return h('div', { class: 'notice warn' }, 'Songtexte sind gerade nicht erreichbar. ',
       h('button', { class: 'link-btn', onclick: () => {
         lyrics.status = 'loading';
-        renderLyrics();
+        renderNowPlaying();
         loadLyrics(lyrics.key, 2);
       } }, 'Erneut versuchen'));
-  } else if (status === 'instrumental') {
-    body = emptyState('Instrumental', 'Dieser Song hat keinen Gesang – einfach zurücklehnen und zuhören.');
-  } else if (status === 'none') {
-    body = emptyState('Kein Songtext gefunden', 'Zu diesem Song gibt es leider noch keinen Songtext.');
-  } else if (data.synced) {
-    body = h('div', { class: 'lyric-lines' }, ...data.synced.map((line) => h('p', {
+  }
+  if (status === 'instrumental') return emptyState('Instrumental', 'Dieser Song hat keinen Gesang – einfach zurücklehnen und zuhören.');
+  if (status === 'none') return emptyState('Kein Songtext gefunden', 'Zu diesem Song gibt es leider noch keinen Songtext.');
+  const body = data.synced
+    ? h('div', { class: 'lyric-lines' }, ...data.synced.map((line) => h('p', {
       class: `lyric-line${line.text ? '' : ' gap'}`,
       onclick: () => seekTo(line.time),
-    }, line.text || '♪')));
-  } else {
-    body = h('div', { class: 'lyrics-plain' }, data.plain);
-  }
-  const source = status === 'found'
-    ? h('p', { class: 'lyrics-source' }, data.synced ? 'Songtext von LRCLIB · Klick auf eine Zeile springt dorthin' : 'Songtext von LRCLIB')
-    : null;
-  const content = page(header, body, source);
-  content.classList.add('lyrics-page');
-  root.replaceChildren(content);
-  lyrics.lineIndex = -1;
-  updateLyricsLine(true);
+    }, line.text || '♪')))
+    : h('div', { class: 'lyrics-plain' }, data.plain);
+  const credit = data.source === 'YouTube Music'
+    ? `Songtext von YouTube Music${data.credit ? ` · ${data.credit}` : ''}`
+    : data.synced ? 'Songtext von LRCLIB · Klick auf eine Zeile springt dorthin' : 'Songtext von LRCLIB';
+  return [body, h('p', { class: 'lyrics-source' }, credit)];
 }
 
 /** Hebt die Zeile hervor, die gerade gesungen wird, und scrollt mit. */
 function updateLyricsLine(jump = false) {
-  if (view.kind !== 'lyrics' || lyrics.status !== 'found' || !lyrics.data?.synced) return;
+  if (view.kind !== 'nowplaying' || nowTab !== 'lyrics' || lyrics.status !== 'found' || !lyrics.data?.synced) return;
   const current = hub.current();
   if (lyricsKey(current) !== lyrics.key) return;
   const index = activeLineIndex(lyrics.data.synced, current.position);
   if (index === lyrics.lineIndex && !jump) return;
   lyrics.lineIndex = index;
-  const nodes = $('view-lyrics').querySelectorAll('.lyric-line');
+  const nodes = $('view-nowplaying').querySelectorAll('.lyric-line');
   nodes.forEach((node, i) => {
     node.classList.toggle('active', i === index);
     node.classList.toggle('past', i < index);
@@ -1490,6 +1948,7 @@ function renderHome() {
   }
   root.replaceChildren(page(sections));
   renderHomeShelf();
+  loadHomeFeed();
   renderPlayer(true);
   for (const provider of list) if (provider.library && loginStatus[provider.id] && !library[provider.id]) loadLibrary(provider.id);
 }
@@ -1509,6 +1968,11 @@ function renderHomeShelf() {
   const items = interleave(connected().map((p) => (library[p.id]?.status === 'done' ? library[p.id].items : []))).slice(0, 10);
   if (own.length || saved.length || items.length) {
     parts.push(h('h2', { class: 'section-title' }, 'Deine Musik'), h('div', { class: 'collection-grid' }, own.map(moonifyCard), saved.map(collectionCard), items.map(collectionCard)));
+  }
+  if (settings.enabled.ytmusic && homeFeed?.status === 'done' && homeFeed.data.sections.length) {
+    parts.push(h('div', { class: 'section-head spaced' }, h('h2', {}, 'Von YouTube Music'),
+      h('button', { class: 'link-btn', onclick: openExplore }, 'Erkunden')),
+    browseSections(homeFeed.data.sections.slice(0, 8)));
   }
   shelf.replaceChildren(...parts);
 }
@@ -1631,7 +2095,7 @@ function setUpdateStatus(status) {
 
 /* ---------- Navigation ---------- */
 
-const VIEWS = ['home', 'search', 'library', 'collection', 'artist', 'queue', 'lyrics', 'settings'];
+const VIEWS = ['home', 'search', 'explore', 'browse', 'library', 'collection', 'artist', 'nowplaying', 'settings'];
 
 const sameView = (a, b) => a.kind === b.kind && a.state === b.state;
 
@@ -1640,7 +2104,7 @@ function showView(next, { back = false } = {}) {
   const leaving = view;
   if (!sameView(leaving, next)) {
     leaving.scroll = $(`view-${leaving.kind}`).scrollTop;
-    if (!back && leaving.kind !== 'lyrics') {
+    if (!back) {
       backStack.push(leaving);
       if (backStack.length > 40) backStack.shift();
     }
@@ -1648,16 +2112,19 @@ function showView(next, { back = false } = {}) {
   view = next;
   if (view.kind === 'collection' && view.state) collection = view.state;
   if (view.kind === 'artist' && view.state) artistState = view.state;
+  if (view.kind === 'browse' && view.state) browseState = view.state;
+  if (view.kind === 'explore' && view.state) exploreState = view.state;
   for (const name of VIEWS) $(`view-${name}`).classList.toggle('active', view.kind === name);
   if (view.kind === 'home') renderHome();
   if (view.kind === 'search') renderSearch();
   if (view.kind === 'library') renderLibrary();
   if (view.kind === 'collection') renderCollection();
   if (view.kind === 'artist') renderArtist();
-  if (view.kind === 'queue') renderQueue();
-  if (view.kind === 'lyrics') renderLyrics();
+  if (view.kind === 'explore') renderExplore();
+  if (view.kind === 'browse') renderBrowse();
+  if (view.kind === 'nowplaying') renderNowPlaying();
   if (view.kind === 'settings') renderSettings();
-  if (view.kind !== 'lyrics' && !sameView(leaving, next)) $(`view-${view.kind}`).scrollTop = back ? view.scroll || 0 : 0;
+  if (!sameView(leaving, next)) $(`view-${view.kind}`).scrollTop = back ? view.scroll || 0 : 0;
   closeMenu();
   renderSidebar();
   renderLyricsButton();
@@ -1707,9 +2174,10 @@ function renderSidebar() {
   const open = openViewKey();
   const inSidebar = open && (open.startsWith('moonify:') || store.data.saved.some((i) => itemKey(i) === open));
   // Playlist/Künstler: den Bereich markieren, aus dem man gekommen ist (Suche, Bibliothek …)
-  const origin = [...backStack].reverse().find((v) => !['collection', 'artist', 'lyrics'].includes(v.kind))?.kind || '';
-  const active = view.kind === 'collection' || view.kind === 'artist' ? (inSidebar ? '' : origin) : view.kind;
-  for (const name of ['home', 'search', 'library', 'settings']) $(`nav-${name}`).classList.toggle('active', active === name);
+  const origin = [...backStack].reverse().find((v) => !['collection', 'artist', 'browse', 'nowplaying'].includes(v.kind))?.kind || '';
+  const nested = ['collection', 'artist', 'browse'].includes(view.kind);
+  const active = nested ? (inSidebar ? '' : origin) : view.kind;
+  for (const name of ['home', 'search', 'explore', 'library', 'settings']) $(`nav-${name}`).classList.toggle('active', active === name);
   const hasUpdate = ['ready', 'available'].includes(updateStatus?.state);
   $('nav-settings').classList.toggle('has-badge', hasUpdate);
   const current = hub.current();
@@ -1794,6 +2262,7 @@ function renderPlayer(force = false) {
     play.setAttribute('aria-label', playing ? 'Pause' : 'Abspielen');
     play.title = playing ? 'Pause' : 'Abspielen';
   }
+  renderModeButtons(current);
   $('btn-prev').disabled = !(current?.canPrev || (queue.active && queue.index > 0));
   $('btn-next').disabled = !(current?.canNext || (queue.active && queue.upcoming().length));
   const known = currentKnownTrack();
@@ -1826,6 +2295,45 @@ function renderPlayer(force = false) {
   }
   document.title = current?.title && playing ? `${current.title} · Moonify` : 'Moonify';
   updateLyricsLine();
+}
+
+/** Zufall & Wiederholen: steuern den Player des Dienstes (bzw. Moonifys Warteschlange). */
+function renderModeButtons(current) {
+  const shuffle = $('btn-shuffle');
+  const canShuffle = Boolean(current?.canShuffle) || (queue.active && queue.upcoming().length > 1);
+  shuffle.disabled = !canShuffle;
+  shuffle.classList.toggle('active', current?.shuffle === true);
+  shuffle.setAttribute('aria-pressed', String(current?.shuffle === true));
+  const repeat = $('btn-repeat');
+  const mode = current?.repeat || '';
+  repeat.disabled = !mode;
+  repeat.classList.toggle('active', mode === 'all' || mode === 'one');
+  if (repeat.dataset.mode !== mode) {
+    repeat.dataset.mode = mode;
+    repeat.innerHTML = mode === 'one' ? icons.repeatOne : icons.repeat;
+    const label = { off: 'Wiederholen: aus', all: 'Wiederholen: alle', one: 'Wiederholen: diesen Song' }[mode] || 'Wiederholen (bei diesem Dienst nicht verfügbar)';
+    repeat.title = label;
+    repeat.setAttribute('aria-label', label);
+  }
+}
+
+function toggleShuffle() {
+  const c = hub.current();
+  // Moonifys eigene Warteschlange mischt Moonify selbst
+  if (queue.active && queue.upcoming().length > 1) {
+    queue.shuffleUpcoming();
+    toast('Warteschlange gemischt 🔀', 'ok');
+    return;
+  }
+  if (c?.canShuffle) {
+    api.engines.command(c.id, { type: 'shuffle' });
+    if (c.id === 'ytmusic') toast('YouTube Music mischt „Als Nächstes“ neu 🔀');
+  }
+}
+
+function cycleRepeat() {
+  const c = hub.current();
+  if (c?.repeat) api.engines.command(c.id, { type: 'repeat' });
 }
 
 function setText(node, value) {
@@ -1889,6 +2397,142 @@ async function refreshLoginStatus(quiet = false) {
 
 /* ---------- Start ---------- */
 
+/* ---------- Tastenkürzel (wie bei YouTube Music) ---------- */
+
+const SHORTCUTS = [
+  ['Leertaste / K', 'Abspielen / Pause'],
+  ['J / L', '10 Sekunden zurück / vor'],
+  ['Umschalt + N / P', 'Nächster / vorheriger Titel'],
+  ['+ / −', 'Lauter / leiser'],
+  ['M', 'Stumm schalten'],
+  ['S / R', 'Zufall / Wiederholen'],
+  ['/  oder  Strg + K', 'Suchen'],
+  ['Alt + ←', 'Zurück'],
+  ['?', 'Diese Übersicht'],
+];
+
+function showShortcuts() {
+  const table = h('div', { class: 'shortcut-list' }, SHORTCUTS.map(([keys, label]) => h('div', { class: 'shortcut' }, h('kbd', {}, keys), h('span', {}, label))));
+  openModal({ title: 'Tastenkürzel', text: '', body: table, actions: [{ label: 'Schließen' }] });
+}
+
+function handleShortcut(e) {
+  const c = hub.current();
+  const key = e.key;
+  const run = (fn) => {
+    e.preventDefault();
+    fn();
+  };
+  if (key === 'k' || key === 'K') run(togglePlay);
+  else if ((key === 'j' || key === 'l') && c) run(() => seekTo(Math.max(0, Math.min(c.duration || Infinity, c.position + (key === 'l' ? 10 : -10)))));
+  else if (key === 'N' && e.shiftKey) run(() => $('btn-next').click());
+  else if (key === 'P' && e.shiftKey) run(() => $('btn-prev').click());
+  else if (key === '+' || key === '=') run(() => setVolume(Math.min(1, (settings.muted ? 0 : settings.volume) + 0.05), false));
+  else if (key === '-') run(() => setVolume(Math.max(0, settings.volume - 0.05), false));
+  else if (key === 'm' || key === 'M') run(() => $('btn-mute').click());
+  else if (key === 's' || key === 'S') run(toggleShuffle);
+  else if (key === 'r' || key === 'R') run(cycleRepeat);
+  else if (key === '/') run(() => $('search-input').focus());
+  else if (key === '?') run(showShortcuts);
+}
+
+/* ---------- Suchvorschläge ---------- */
+
+const suggest = { token: 0, items: [], index: -1, timer: 0 };
+
+function bindSuggestions() {
+  const input = $('search-input');
+  const box = h('div', { class: 'suggest-box', id: 'suggest', role: 'listbox', hidden: true });
+  $('search-form').append(box);
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', 'suggest');
+  input.addEventListener('input', () => {
+    clearTimeout(suggest.timer);
+    suggest.timer = setTimeout(() => updateSuggestions(input.value), 160);
+  });
+  input.addEventListener('focus', () => updateSuggestions(input.value));
+  input.addEventListener('blur', () => setTimeout(hideSuggestions, 150));
+  input.addEventListener('keydown', (e) => {
+    if (box.hidden || !suggest.items.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      // -1 = das Suchfeld selbst, danach die Vorschläge – rundum
+      const count = suggest.items.length;
+      let next = suggest.index + (e.key === 'ArrowDown' ? 1 : -1);
+      if (next < -1) next = count - 1;
+      if (next >= count) next = -1;
+      suggest.index = next;
+      renderSuggestions();
+    } else if (e.key === 'Enter' && suggest.index >= 0) {
+      e.preventDefault();
+      pickSuggestion(suggest.items[suggest.index].text);
+    } else if (e.key === 'Escape') {
+      hideSuggestions();
+    }
+  });
+}
+
+async function updateSuggestions(value) {
+  const token = ++suggest.token;
+  const q = value.trim();
+  const lower = q.toLowerCase();
+  const recent = store.data.searches.filter((s) => s.toLowerCase().startsWith(lower) && s.toLowerCase() !== lower).slice(0, q ? 3 : 6);
+  let queries = [];
+  if (q && settings.enabled.ytmusic) {
+    try {
+      queries = parseYtmSuggestions(await request('ytmusic', { type: 'suggest', input: q })).queries;
+    } catch {
+      queries = [];
+    }
+  }
+  if (token !== suggest.token || document.activeElement !== $('search-input')) return;
+  const seen = new Set(recent.map((r) => r.toLowerCase()));
+  suggest.items = [
+    ...recent.map((text) => ({ text, recent: true })),
+    ...queries.filter((x) => !seen.has(x.toLowerCase())).map((text) => ({ text, recent: false })),
+  ].slice(0, 8);
+  suggest.index = -1;
+  renderSuggestions();
+}
+
+function renderSuggestions() {
+  const box = $('suggest');
+  const q = $('search-input').value.trim().toLowerCase();
+  box.hidden = !suggest.items.length;
+  box.replaceChildren(...suggest.items.map((item, i) => {
+    const starts = q && item.text.toLowerCase().startsWith(q);
+    return h('button', {
+      class: `suggest-item${i === suggest.index ? ' active' : ''}`,
+      type: 'button',
+      role: 'option',
+      'aria-selected': String(i === suggest.index),
+      // mousedown statt click: sonst schließt das Verlassen des Suchfelds die Liste vorher
+      onmousedown: (e) => {
+        e.preventDefault();
+        pickSuggestion(item.text);
+      },
+    },
+    h('span', { class: 'suggest-icon', html: item.recent ? icons.history : icons.search }),
+    starts ? h('span', {}, h('span', { class: 'muted' }, item.text.slice(0, q.length)), h('strong', {}, item.text.slice(q.length))) : h('span', {}, item.text));
+  }));
+}
+
+function hideSuggestions() {
+  suggest.token += 1;
+  suggest.items = [];
+  const box = $('suggest');
+  if (box) box.hidden = true;
+}
+
+function pickSuggestion(text) {
+  hideSuggestions();
+  $('search-input').value = text;
+  runSearch(text);
+  $('search-input').blur();
+}
+
+const captchaShown = {}; // „Bist du ein Roboter?“ höchstens alle 5 Minuten melden
+
 function bindStaticUi() {
   $('brand-moon').innerHTML = moonSvg({ lit: 0.72, waxing: true });
   $('search-icon').innerHTML = icons.search;
@@ -1896,6 +2540,7 @@ function bindStaticUi() {
   $('btn-next').innerHTML = icons.next;
   $('nav-home').innerHTML = `${icons.home}<span class="nav-label">Start</span>`;
   $('nav-search').innerHTML = `${icons.search}<span class="nav-label">Suchen</span>`;
+  $('nav-explore').innerHTML = `${icons.compass}<span class="nav-label">Erkunden</span>`;
   $('nav-library').innerHTML = `${icons.library}<span class="nav-label">Bibliothek</span>`;
   $('nav-settings').innerHTML = `${icons.settings}<span class="nav-label">Einstellungen</span><span class="badge" aria-label="Update verfügbar"></span>`;
   $('search-kbd').textContent = info.platform === 'darwin' ? '⌘ K' : 'Strg K';
@@ -1903,9 +2548,11 @@ function bindStaticUi() {
   for (const name of ['home', 'search', 'library', 'settings']) {
     $(`nav-${name}`).addEventListener('click', () => showView({ kind: name }));
   }
+  $('nav-explore').addEventListener('click', openExplore);
 
   $('search-form').addEventListener('submit', (e) => {
     e.preventDefault();
+    hideSuggestions();
     runSearch($('search-input').value);
     $('search-input').blur();
   });
@@ -1928,13 +2575,26 @@ function bindStaticUi() {
     }
     if (c) api.engines.command(c.id, { type: 'prev' });
   });
-  $('btn-queue').addEventListener('click', () => showView(view.kind === 'queue' ? { kind: 'home' } : { kind: 'queue' }));
+  $('btn-queue').addEventListener('click', () => toggleNowPlaying('queue'));
   $('btn-queue').innerHTML = icons.queue;
-  $('btn-lyrics').addEventListener('click', toggleLyrics);
+  $('btn-lyrics').addEventListener('click', () => toggleNowPlaying('lyrics'));
   $('btn-lyrics').innerHTML = icons.lyrics;
-  for (const type of ['wheel', 'touchmove']) {
-    $('view-lyrics').addEventListener(type, () => { lyrics.userScrollAt = Date.now(); }, { passive: true });
+  $('btn-shuffle').addEventListener('click', toggleShuffle);
+  $('btn-shuffle').innerHTML = icons.shuffle;
+  $('btn-repeat').addEventListener('click', cycleRepeat);
+  $('btn-repeat').innerHTML = icons.repeat;
+  // Cover oder Titel in der Playerleiste → „Jetzt läuft“
+  for (const id of ['now-art', 'now-title']) {
+    $(id).addEventListener('click', () => {
+      if (!hub.current()) return;
+      if (view.kind === 'nowplaying') goBack();
+      else openNowPlaying();
+    });
   }
+  for (const type of ['wheel', 'touchmove']) {
+    $('view-nowplaying').addEventListener(type, () => { lyrics.userScrollAt = Date.now(); }, { passive: true });
+  }
+  bindSuggestions();
 
   // Maustaste „Zurück“
   window.addEventListener('mouseup', (e) => {
@@ -1958,12 +2618,12 @@ function bindStaticUi() {
     if (view.kind === 'collection') renderCollection();
     if (view.kind === 'artist') renderArtist();
     if (view.kind === 'search') renderSearch();
-    if (view.kind === 'queue') renderQueue();
+    if (view.kind === 'nowplaying') renderNowPlaying();
     if (view.kind === 'home') renderHomeShelf();
     renderSidebar();
   });
   queue.addEventListener('change', () => {
-    renderQueueIfVisible();
+    renderNowPlayingIfVisible('queue');
     renderPlayer();
   });
   $('now-source').addEventListener('click', () => {
@@ -1992,9 +2652,11 @@ function bindStaticUi() {
       if (document.getElementById('menu')) closeMenu();
       else if (!$('modal').hidden) $('modal').hidden = true;
       else if (document.activeElement === $('search-input')) $('search-input').blur();
-    } else if (e.code === 'Space' && !typing && !(e.target instanceof HTMLButtonElement) && !e.target?.closest?.('.moon-progress, .track-row')) {
+    } else if (e.code === 'Space' && !typing && !(e.target instanceof HTMLButtonElement) && !e.target?.closest?.('.moon-progress, .track-row, [role="button"]')) {
       e.preventDefault();
       togglePlay();
+    } else if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      handleShortcut(e);
     }
   });
 
@@ -2003,6 +2665,7 @@ function bindStaticUi() {
   });
   let sidebarKey = '';
   let rowsKey = '';
+  let nowKey = '';
   hub.addEventListener('change', () => {
     watchLyrics();
     renderPlayer();
@@ -2019,8 +2682,15 @@ function bindStaticUi() {
       if (view.kind === 'search') renderSearch();
       if (view.kind === 'collection') renderCollection();
       if (view.kind === 'artist') renderArtist();
-      if (view.kind === 'queue') renderQueue();
+      if (view.kind === 'browse') renderBrowse();
+      if (view.kind === 'explore') renderExplore();
       if (view.kind === 'home') renderHomeShelf();
+    }
+    // „Jetzt läuft“: bei neuem Song, Cover oder Video neu zeichnen
+    const nextNow = current ? `${current.id}:${current.title}:${current.artwork}:${current.videoId}:${current.playing}` : '';
+    if (nextNow !== nowKey) {
+      nowKey = nextNow;
+      if (view.kind === 'nowplaying') renderNowPlaying();
     }
   });
 
@@ -2058,6 +2728,14 @@ function bindStaticUi() {
   api.engines.onNotice?.((id, notice) => {
     const name = getProvider(id)?.name || 'Der Dienst';
     if (notice === 'google-retry') toast('Google hat die Anmeldung abgelehnt – Moonify versucht es mit einer anderen Methode …');
+    if (notice === 'captcha' && Date.now() - (captchaShown[id] || 0) > 5 * 60 * 1000) {
+      captchaShown[id] = Date.now();
+      openModal({
+        title: `${name} möchte kurz etwas prüfen`,
+        text: 'Google fragt, ob du kein Roboter bist (das passiert manchmal nach vielen Anfragen). Öffne das Fenster und bestätige es – danach läuft die Musik weiter.',
+        actions: [{ label: 'Später' }, { label: 'Fenster öffnen', run: () => api.engines.show(id) }],
+      });
+    }
     if (notice === 'google-blocked') {
       openModal({
         title: 'Google blockiert die Anmeldung',

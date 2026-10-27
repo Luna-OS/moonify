@@ -180,6 +180,50 @@ function moonifyEngine() {
     return { position: 0, duration: 0 };
   }
 
+  /* ---------------- Wiederholen, Zufall, aktueller Song ---------------- */
+
+  const SPOTIFY_REPEAT = '[data-testid="control-button-repeat"]';
+  const SPOTIFY_SHUFFLE = '[data-testid="control-button-shuffle"]';
+
+  function ytBar() {
+    return document.querySelector('ytmusic-player-bar');
+  }
+
+  /** Zustand der Knöpfe „Wiederholen“ und „Zufall“ im Player des Dienstes. */
+  function controls() {
+    if (provider === 'ytmusic') {
+      const bar = ytBar();
+      const mode = bar ? String(bar.getAttribute('repeat-mode') || bar.getAttribute('repeat-mode_') || '').toUpperCase() : '';
+      const url = new URL(location.href);
+      const onWatch = url.pathname === '/watch';
+      return {
+        repeat: { NONE: 'off', ALL: 'all', ONE: 'one' }[mode] || '',
+        canShuffle: !!(bar && bar.querySelector('.shuffle')),
+        shuffle: null, // YouTube Music mischt die Warteschlange einmal neu (kein An/Aus)
+        videoId: onWatch ? url.searchParams.get('v') || '' : '',
+        playlistId: onWatch ? url.searchParams.get('list') || '' : '',
+      };
+    }
+    if (provider === 'spotify') {
+      const repeat = document.querySelector(SPOTIFY_REPEAT);
+      const shuffle = document.querySelector(SPOTIFY_SHUFFLE);
+      const checked = repeat ? repeat.getAttribute('aria-checked') : null;
+      return {
+        repeat: !repeat || repeat.disabled ? '' : checked === 'mixed' ? 'one' : checked === 'true' ? 'all' : 'off',
+        canShuffle: !!shuffle && !shuffle.disabled,
+        shuffle: shuffle ? shuffle.getAttribute('aria-checked') === 'true' : null,
+      };
+    }
+    return { repeat: '', canShuffle: false, shuffle: null };
+  }
+
+  function clickControl(kind) {
+    let button = null;
+    if (provider === 'ytmusic') button = ytBar()?.querySelector(kind === 'repeat' ? '.repeat' : '.shuffle');
+    if (provider === 'spotify') button = document.querySelector(kind === 'repeat' ? SPOTIFY_REPEAT : SPOTIFY_SHUFFLE);
+    if (button && !button.disabled) button.click();
+  }
+
   let wasPlaying = false;
   function snapshot() {
     const media = findMedia();
@@ -203,6 +247,7 @@ function moonifyEngine() {
       canNext: typeof handlers.nexttrack === 'function',
       canPrev: typeof handlers.previoustrack === 'function',
       canSeek: typeof handlers.seekto === 'function' || !!media,
+      ...controls(),
     };
   }
 
@@ -554,7 +599,8 @@ function moonifyEngine() {
       method: 'POST',
       headers,
       credentials: 'same-origin',
-      body: JSON.stringify(Object.assign({ context: cfg.INNERTUBE_CONTEXT }, payload)),
+      // Texte (Regal-Titel, „Mehr“-Knöpfe …) auf Deutsch – passend zu Moonify
+      body: JSON.stringify(Object.assign({ context: Object.assign({}, cfg.INNERTUBE_CONTEXT, { client: Object.assign({}, cfg.INNERTUBE_CONTEXT.client, { hl: 'de' }) }) }, payload)),
     });
     if (!response.ok) throw new Error('HTTP ' + response.status);
     return response.text();
@@ -616,6 +662,28 @@ function moonifyEngine() {
       if (type === 'search') return innertube('search', req.params ? { query: req.query, params: String(req.params) } : { query: req.query });
       if (type === 'library') return innertube('browse', { browseId: 'FEmusic_liked_playlists' });
       if (type === 'collection' || type === 'artist') return innertube('browse', { browseId: String(ref.browseId) });
+      // Beliebige Seite (Erkunden, Charts, Startseite, Songtext, Ähnliche Titel …)
+      if (type === 'browse') {
+        const browseId = String(req.browseId || '');
+        if (!/^[\w-]{2,200}$/.test(browseId)) throw new Error('Unbekannte Seite');
+        return innertube('browse', req.params ? { browseId, params: String(req.params) } : { browseId });
+      }
+      // „Als Nächstes“, Songtext- und Ähnlich-Seite zum Song
+      if (type === 'next') {
+        const videoId = String(req.videoId || '');
+        if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Unbekannter Song');
+        const payload = { videoId, isAudioOnly: true };
+        if (/^[\w-]{2,80}$/.test(String(req.playlistId || ''))) payload.playlistId = String(req.playlistId);
+        return innertube('next', payload);
+      }
+      if (type === 'suggest') return innertube('music/get_search_suggestions', { input: String(req.input || '').slice(0, 100) });
+      // Daumen hoch/runter (nur angemeldet)
+      if (type === 'like') {
+        const action = { like: 'like', dislike: 'dislike', none: 'removelike' }[req.action];
+        const videoId = String(req.videoId || '');
+        if (!action || !/^[\w-]{11}$/.test(videoId)) throw new Error('Ungültige Bewertung');
+        return innertube(`like/${action}`, { target: { videoId } });
+      }
       if (type === 'open') {
         setTimeout(() => location.assign(`/browse/${encodeURIComponent(String(ref.browseId))}`), 50);
         return 'navigating';
@@ -667,6 +735,10 @@ function moonifyEngine() {
         break;
       case 'next':
         callHandler('nexttrack');
+        break;
+      case 'repeat':
+      case 'shuffle':
+        clickControl(command.type);
         break;
       case 'prev':
         callHandler('previoustrack');

@@ -41,6 +41,13 @@ export function normalizeState(raw) {
     canNext: r.canNext === true,
     canPrev: r.canPrev === true,
     canSeek: r.canSeek === true,
+    // Wiederholen: '' = gibt es bei diesem Dienst nicht
+    repeat: ['off', 'all', 'one'].includes(r.repeat) ? r.repeat : '',
+    canShuffle: r.canShuffle === true,
+    shuffle: typeof r.shuffle === 'boolean' ? r.shuffle : null,
+    // Aktueller Song bei YouTube Music (für „Als Nächstes“, Songtext, Ähnliche Titel)
+    videoId: typeof r.videoId === 'string' && /^[\w-]{11}$/.test(r.videoId) ? r.videoId : '',
+    playlistId: typeof r.playlistId === 'string' && /^[\w-]{2,80}$/.test(r.playlistId) ? r.playlistId : '',
   };
 }
 
